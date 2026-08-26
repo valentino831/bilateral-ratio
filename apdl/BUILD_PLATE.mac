@@ -1,0 +1,298 @@
+/PREP7
+
+*IF,TH,EQ,0,THEN
+  TH = 5
+*ENDIF
+*IF,LXP,EQ,0,THEN
+  LXP = 80
+*ENDIF
+*IF,LYP,EQ,0,THEN
+  LYP = 30
+*ENDIF
+*IF,HD,EQ,0,THEN
+  HD = 2
+*ENDIF
+*IF,HDEPTH,EQ,0,THEN
+  HDEPTH = 2.5
+*ENDIF
+*IF,HY1,EQ,0,THEN
+  HY0 = 5
+  HY1 = 15
+*ENDIF
+*IF,SPOTR,EQ,0,THEN
+  SPOTR = 4
+  SPOTY = 9
+*ENDIF
+*IF,ESZ,EQ,0,THEN
+  ESZ = 1.0
+*ENDIF
+*IF,FSZ,EQ,0,THEN
+  FSZ = ESZ
+*ENDIF
+*IF,NZDIV,EQ,0,THEN
+  NZDIV = 24
+*ENDIF
+*IF,HCONV,EQ,0,THEN
+  HCONV = 10
+*ENDIF
+*IF,TAMB,EQ,0,THEN
+  TAMB = 20
+*ENDIF
+
+MM = 1.0e-3
+TH_ = TH*MM
+LX_ = LXP*MM
+LY_ = LYP*MM
+HR_ = HD*MM/2
+HX_ = HXP*MM
+HY0_ = HY0*MM
+HY1_ = HY1*MM
+ZAX_ = TH_ - HDEPTH*MM
+SX_ = SPOTX*MM
+SY_ = SPOTY*MM
+SR_ = SPOTR*MM
+ESZ_ = ESZ*MM
+FSZ_ = FSZ*MM
+TOL_ = 1.0e-6
+
+MP,KXX,1,30.0
+MP,DENS,1,7850.0
+MP,C,1,500.0
+MP,KXX,2,0.026
+MP,DENS,2,1.2
+MP,C,2,1005.0
+
+ET,1,SOLID70
+
+BLOCK,-LX_/2,LX_/2,-LY_/2,LY_/2,0,TH_
+
+OVER_ = 0
+*IF,HY1_,GE,LY_/2-TOL_,THEN
+  OVER_ = 1.0e-3
+*ENDIF
+
+WPCSYS,-1
+WPOFFS,HX_,0,ZAX_
+WPROTA,0,90,0
+CYLIND,HR_,0,-HY1_-OVER_,-HY0_,0,360
+WPCSYS,-1
+
+VOVLAP,1,2
+
+*IF,OVER_,GT,0,THEN
+  VSEL,S,LOC,Y,LY_/2+TOL_,LY_/2+2*OVER_
+  VDELE,ALL, , ,1
+  ALLSEL,ALL
+*ENDIF
+
+VSEL,ALL
+VSUM
+*GET,NV_,VOLU,0,COUNT
+VMIN_ = 1.0e9
+VCYL_ = 0
+VNUM_ = 0
+*DO,I_,1,NV_
+  VNUM_ = VLNEXT(VNUM_)
+  *GET,VVOL_,VOLU,VNUM_,VOLU
+  *IF,VVOL_,LT,VMIN_,THEN
+    VMIN_ = VVOL_
+    VCYL_ = VNUM_
+  *ENDIF
+*ENDDO
+
+VSEL,ALL
+VATT,1,,1
+*IF,DEFECT,EQ,1,THEN
+  VSEL,S,VOLU,,VCYL_
+  VATT,2,,1
+  VSEL,ALL
+*ENDIF
+
+SMRTSIZE,OFF
+ESIZE,ESZ_
+*IF,ASZ,GT,0,THEN
+  ASZ_ = ASZ*MM
+*ELSE
+  ASZ_ = HR_/2
+  *IF,ASZ_,GT,ESZ_/2,THEN
+    ASZ_ = ESZ_/2
+  *ENDIF
+*ENDIF
+ASEL,S,LOC,Z,-TOL_,TOL_
+ASEL,A,LOC,Z,TH_-TOL_,TH_+TOL_
+ASEL,A,LOC,X,-LX_/2-TOL_,-LX_/2+TOL_
+ASEL,A,LOC,X,LX_/2-TOL_,LX_/2+TOL_
+ASEL,A,LOC,Y,-LY_/2-TOL_,-LY_/2+TOL_
+ASEL,A,LOC,Y,LY_/2-TOL_,LY_/2+TOL_
+AESIZE,ALL,ESZ_
+ALLSEL,ALL
+
+VSEL,S,VOLU,,VCYL_
+ASLV,S
+AESIZE,ALL,ASZ_
+ALLSEL,ALL
+/COM, ---- element size on the channel areas [m]:
+*STATUS,ASZ_
+
+ASEL,S,LOC,Z,-TOL_,TOL_
+ASEL,A,LOC,Z,TH_-TOL_,TH_+TOL_
+AESIZE,ALL,FSZ_
+ALLSEL,ALL
+/COM, ---- size requested on the two observed faces [m]:
+*STATUS,FSZ_
+
+MSHAPE,1,3D
+MSHKEY,0
+VMESH,ALL
+ALLSEL,ALL
+
+*IF,FREF,GT,0,THEN
+  ASEL,S,LOC,Z,-TOL_,TOL_
+  ASEL,A,LOC,Z,TH_-TOL_,TH_+TOL_
+  AREFINE,ALL, , ,FREF,0,CLEAN,OFF
+  ALLSEL,ALL
+*ENDIF
+
+ASEL,S,LOC,Z,-TOL_,TOL_
+ASEL,A,LOC,Z,TH_-TOL_,TH_+TOL_
+ASEL,A,LOC,X,-LX_/2-TOL_,-LX_/2+TOL_
+ASEL,A,LOC,X,LX_/2-TOL_,LX_/2+TOL_
+ASEL,A,LOC,Y,-LY_/2-TOL_,-LY_/2+TOL_
+ASEL,A,LOC,Y,LY_/2-TOL_,LY_/2+TOL_
+SFA,ALL,1,CONV,HCONV,TAMB
+ALLSEL,ALL
+
+CSYS,0
+NSEL,S,LOC,Z,TH_-TOL_,TH_+TOL_
+CM,TOPFACE,NODE
+
+WPCSYS,-1
+WPOFFS,SX_,SY_,TH_
+CSWPLA,11,1
+CSYS,11
+CMSEL,S,TOPFACE
+NSEL,R,LOC,X,0,SR_
+CM,superficie_laser,NODE
+*GET,NSPOT_,NODE,0,COUNT
+CSYS,0
+WPCSYS,-1
+CMDELE,TOPFACE
+ALLSEL,ALL
+
+CSYS,0
+ALLSEL,ALL
+ESEL,ALL
+NSLE,S
+CM,NUTILI,NODE
+
+CMSEL,S,NUTILI
+NSEL,R,LOC,Z,-TOL_,TOL_
+*GET,NBACK_,NODE,0,COUNT
+CMSEL,S,NUTILI
+NSEL,R,LOC,Z,TH_-TOL_,TH_+TOL_
+*GET,NFRONT_,NODE,0,COUNT
+CMSEL,S,NUTILI
+NSEL,R,LOC,Z,-TOL_,TOL_
+CM,FACCE,NODE
+CMSEL,S,NUTILI
+NSEL,R,LOC,Z,TH_-TOL_,TH_+TOL_
+CMSEL,A,FACCE
+CM,FACCE,NODE
+*GET,NFACE_,NODE,0,COUNT
+CMDELE,NUTILI
+
+CMSEL,S,FACCE
+*GET,NF_,NODE,0,COUNT
+*DEL,ZC_, ,NOPR
+*DIM,ZC_,ARRAY,NF_
+*VGET,ZC_(1),NODE, ,LOC,Z
+*VSCFUN,ZSUM_,SUM,ZC_(1)
+*VSCFUN,ZMIN_,MIN,ZC_(1)
+*VSCFUN,ZMAX_,MAX,ZC_(1)
+NZT_ = ZSUM_/TH_
+NZ0_ = NF_ - NZT_
+ALLSEL,ALL
+/COM, ---- cross check on the z levels of the FACCE nodes:
+*STATUS,ZMIN_
+*STATUS,ZMAX_
+*STATUS,NZT_
+*STATUS,NZ0_
+/COM, ---- ZMIN_ must be 0, ZMAX_ must be TH_, NZT_ must be an INTEGER
+/COM, ---- and equal to NFRONT_. If NZT_ is not an integer, FACCE holds nodes
+/COM, ---- at internal levels and NSEL selected more than it declares.
+
+CSYS,0
+NSEL,S,LOC,Z,-TOL_,TOL_
+*GET,NBTOT_,NODE,0,COUNT
+NSEL,S,LOC,Z,TH_-TOL_,TH_+TOL_
+*GET,NFTOT_,NODE,0,COUNT
+ALLSEL,ALL
+NORFB_ = NBTOT_ - NBACK_
+NORFF_ = NFTOT_ - NFRONT_
+/COM, ---- orphan nodes excluded from FACCE, rear and excited:
+*STATUS,NORFB_
+*STATUS,NORFF_
+/COM, ---- rear face nodes, excited face nodes, and total in FACCE:
+*STATUS,NBACK_
+*STATUS,NFRONT_
+*STATUS,NFACE_
+/COM, ---- NFACE_ must equal NBACK_ + NFRONT_ and match NN_ in the export
+
+FEFF_ = FSZ/(2**FREF)
+NEXP_ = (LXP*LYP)/(FEFF_*FEFF_)
+*IF,NFRONT_,LT,0.7*NEXP_,THEN
+  /COM, ****************************************************************
+  /COM, WARNING: the excited face is too coarse with respect to ESZ.
+  /COM, About NEXP_ nodes expected, NFRONT_ found. DO NOT solve.
+  /COM, ****************************************************************
+  *STATUS,NEXP_
+*ENDIF
+*IF,NBACK_,LT,0.7*NEXP_,THEN
+  /COM, ****************************************************************
+  /COM, WARNING: the rear face is too coarse with respect to ESZ.
+  /COM, ****************************************************************
+  *STATUS,NEXP_
+*ENDIF
+
+RSQ_ = NFRONT_/NBACK_
+*IF,RSQ_,LT,1,THEN
+  RSQ_ = NBACK_/NFRONT_
+*ENDIF
+*IF,RSQ_,GT,1.15,THEN
+  /COM, ****************************************************************
+  /COM, WARNING: the two observed faces are unbalanced.
+  /COM, The ratio between the two counts is RSQ_, above the 1.15 threshold.
+  /COM, Typical cause: FSZ different from ESZ. Set them equal.
+  /COM, ****************************************************************
+  *STATUS,RSQ_
+*ENDIF
+
+TUNIF,TAMB
+
+*GET,NNOD_,NODE,0,COUNT
+*GET,NELE_,ELEM,0,COUNT
+AREA_ = 3.14159265*SR_*SR_
+
+/COM,-------------------------------------------------------------
+/COM, BUILD_PLATE
+*STATUS,TH
+*STATUS,HD
+*STATUS,HDEPTH
+*STATUS,HY0
+*STATUS,HY1
+*STATUS,DEFECT
+*STATUS,NNOD_
+*STATUS,NELE_
+*STATUS,NSPOT_
+*STATUS,VMIN_
+
+*IF,NELE_,GT,120000,THEN
+  /COM, ****************************************************************
+  /COM, WARNING: element count near or above the Student licence cap.
+  /COM, Raise ESZ or raise FSZ. This run will probably fail.
+  /COM, ****************************************************************
+*ENDIF
+/COM, nominal dz [m]:
+*STATUS,TH_
+/COM,-------------------------------------------------------------
+FINISH

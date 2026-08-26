@@ -1,0 +1,70 @@
+FINISH
+/CLEAR, NOSTART
+TH = 5
+LXP = 40
+LYP = 30
+HD = 2.0
+HDEPTH = 2.5
+HXP = 0
+HY0 = 5
+HY1 = 15
+SPOTX = 0
+SPOTY = 9
+SPOTR = 4
+DEFECT = 1
+ESZ = 1.60
+FSZ = 1.60
+FREF = 0
+ASZ = 0
+HCONV = 10
+TAMB = 20
+/INPUT,BUILD_PLATE,mac
+
+/PREP7
+CSYS, 0
+CMSEL, S, FACCE
+*GET, NF_, NODE, 0, COUNT
+
+*DEL, ZV1_, , NOPR
+*DEL, NL_, , NOPR
+*DIM, ZV1_, ARRAY, NF_
+*DIM, NL_,  ARRAY, NF_
+*VGET, NL_(1),  NODE, , NLIST
+*VGET, ZV1_(1), NODE, , LOC, Z
+*VSCFUN, ZS1_, SUM, ZV1_(1)
+
+ZS2_ = 0
+NOUT_ = 0
+*DO, I_, 1, NF_
+  N_ = NL_(I_)
+  *GET, Z_, NODE, N_, LOC, Z
+  ZS2_ = ZS2_ + Z_
+  *IF, Z_, GT, TOL_, THEN
+    *IF, Z_, LT, TH_-TOL_, THEN
+      NOUT_ = NOUT_ + 1
+    *ENDIF
+  *ENDIF
+*ENDDO
+
+NZ1_ = ZS1_/TH_
+NZ2_ = ZS2_/TH_
+
+/COM,-------------------------------------------------------------
+/COM, NF_    nodes in the FACCE component
+/COM, NZ1_   from a vector *VGET, must be an integer equal to NFRONT_
+/COM, NZ2_   from a node by node *GET, the same
+/COM, NOUT_  FACCE nodes that lie on neither of the two faces
+/COM,-------------------------------------------------------------
+*STATUS, NF_
+*STATUS, NFRONT_
+*STATUS, NBACK_
+*STATUS, NZ1_
+*STATUS, NZ2_
+*STATUS, NOUT_
+
+*CFOPEN, MESHT5, txt
+*VWRITE, NF_, NFRONT_, NBACK_, NZ1_, NZ2_, NOUT_
+('NF NFRONT NBACK NZ1_vget NZ2_get NOUT',/,3F9.0,2F11.2,F9.0)
+*CFCLOS
+FINISH
+/EXIT,NOSAVE

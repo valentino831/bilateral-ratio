@@ -1,0 +1,167 @@
+FINISH
+/CLEAR, NOSTART
+/CONFIG, NRES, 100000
+
+RESUME, modello, db
+RUNID = 'F02162'
+FREQ  = 2.1625
+QMAX  = 35000
+ZBACK = 0.005
+
+TOLZ  = ZBACK/1000
+NSKIP = 2
+
+/FILNAME, %RUNID%, 1
+*AFUN, RAD
+PI_ = 3.14159265358979
+
+/PREP7
+CSYS, 0
+CMSEL, S, FACCE
+*GET, NFACE_, NODE, 0, COUNT
+/COM, ---- nodes that will be written to the results file:
+*STATUS, NFACE_
+*IF, NFACE_, EQ, 0, THEN
+  /COM, ************************************************************
+  /COM, ERROR: the FACCE component does not exist in the database.
+  /COM, Rebuild the model with the current version of
+  /COM, BUILD_PLATE.mac, which creates it right after meshing.
+  /COM, ************************************************************
+*ENDIF
+ALLSEL, ALL
+FINISH
+
+/SOLU
+ANTYPE, TRANS
+TRNOPT, FULL
+TIMINT, ON
+KBC, 0
+
+RESCONTROL, DEFINE, NONE, NONE
+OUTRES, ERASE
+OUTRES, ALL, NONE
+OUTRES, NSOL, NSKIP, FACCE
+
+CMSEL, S, superficie_laser
+SFDELE, ALL, HFLUX
+FDELE, ALL, HEAT
+ALLSEL, ALL
+*DEL, TAB_LASER, , NOPR
+
+CMSEL, S, superficie_laser
+*GET, NSP_, NODE, 0, COUNT
+ALLSEL, ALL
+AREA_ = PI_*(SPOTR/1000)**2
+PMAX_ = QMAX*AREA_
+PNODE_ = PMAX_/NSP_
+/COM, ---- spot nodes, total and per node peak power:
+*STATUS, NSP_
+*STATUS, PMAX_
+*STATUS, PNODE_
+
+NPP   = 32
+NPER  = 8
+NPTS  = NPP*NPER + 1
+DT_   = 1.0/(FREQ*NPP)
+TEND_ = NPER/FREQ
+
+*DIM, TAB_LASER, TABLE, NPTS, 1, 1, TIME
+*DO, I_, 1, NPTS
+  T_ = (I_-1)*DT_
+  TAB_LASER(I_,0) = T_
+  TAB_LASER(I_,1) = PNODE_*0.5*(1.0 + COS(2*PI_*FREQ*T_))
+*ENDDO
+
+ISTART_ = NINT(4*NPP/NSKIP) + 1
+
+CMSEL, S, superficie_laser
+F, ALL, HEAT, %TAB_LASER%
+ALLSEL, ALL
+
+AUTOTS, OFF
+DELTIM, DT_, DT_, DT_
+TIME, TEND_
+
+SOLVE
+FINISH
+
+/POST1
+FILE, %RUNID%, rth
+SET, LAST
+CMSEL, S, FACCE
+NSORT, TEMP
+*GET, TMAX_, SORT, , MAX
+*GET, TMIN_, SORT, , MIN
+DT_TOT_ = TMAX_ - TMIN_
+/COM, ---- temperature range on the two faces at the last step:
+*STATUS, TMAX_
+*STATUS, TMIN_
+*STATUS, DT_TOT_
+*IF, DT_TOT_, LT, 1.0e-6, THEN
+  /COM, ************************************************************
+  /COM, WARNING: uniform temperature. The load did NOT arrive.
+  /COM, Check SFLIST on the superficie_laser component.
+  /COM, ************************************************************
+*ENDIF
+ALLSEL, ALL
+FINISH
+
+/POST1
+FILE, %RUNID%, rth
+
+CMSEL, S, FACCE
+*GET, NN_, NODE, 0, COUNT
+*GET, NMAX_, NODE, 0, NUM, MAX
+
+*DIM, MASK_,  ARRAY, NMAX_
+*DIM, XV_,    ARRAY, NMAX_
+*DIM, YV_,    ARRAY, NMAX_
+*DIM, ZV_,    ARRAY, NMAX_
+*DIM, TV_,    ARRAY, NMAX_
+*DIM, TIMEV_, ARRAY, NMAX_
+*DIM, NID_,   ARRAY, NMAX_
+
+*VGET, MASK_(1), NODE, , NSEL
+ALLSEL, ALL
+*VGET, NID_(1), NODE, , NLIST
+*VGET, XV_(1),  NODE, , LOC, X
+*VGET, YV_(1),  NODE, , LOC, Y
+*VGET, ZV_(1),  NODE, , LOC, Z
+
+*VSCFUN, MSUM_, SUM, MASK_(1)
+NSEL_ = (MSUM_ + NMAX_)/2
+/COM, ---- FACCE nodes and nodes marked by the mask, they must agree:
+*STATUS, NN_
+*STATUS, NSEL_
+*IF, ABS(NSEL_-NN_), GT, 0.5, THEN
+  /COM, ****************************************************************
+  /COM, ERROR: the selection mask does not match FACCE.
+  /COM, The CSV would hold the wrong nodes. DO NOT use the results.
+  /COM, ****************************************************************
+*ENDIF
+
+*GET, NSETS_, ACTIVE, 0, SET, NSET
+/COM, ---- result sets available:
+*STATUS, NSETS_
+
+*CFOPEN, %RUNID%, csv
+*DO, IS_, ISTART_, NSETS_, 1
+  SET, , , , , , , IS_
+  *GET, TT_, ACTIVE, 0, SET, TIME
+  *VFILL, TIMEV_(1), RAMP, TT_, 0.0
+  *VGET, TV_(1), NODE, , TEMP
+  *VMASK, MASK_(1)
+  *VWRITE, TIMEV_(1), NID_(1), XV_(1), YV_(1), ZV_(1), TV_(1)
+(E15.8,',',F10.0,',',E15.8,',',E15.8,',',E15.8,',',E17.10)
+*ENDDO
+*CFCLOS
+
+*CFOPEN, %RUNID%, meta
+*VWRITE, TH, LXP, LYP, HD, HDEPTH, HY0, HY1, SPOTY
+('TH,LXP,LYP,HD,HDEPTH,HY0,HY1,SPOTY',/,8(E16.8,','))
+*VWRITE, DEFECT, ESZ, FSZ, FREQ, QMAX, NFRONT_, NBACK_, NELE_
+('DEFECT,ESZ,FSZ,FREQ,QMAX,NFRONT,NBACK,NELE',/,8(E16.8,','))
+*CFCLOS
+
+ALLSEL, ALL
+/COM, ---- done, written %RUNID%.csv and %RUNID%.meta
