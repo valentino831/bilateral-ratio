@@ -58,7 +58,7 @@ def figure_one_face(r):
     ref = r["reference"]
     rows = ref["rows"]
     f = np.array([x["f"] for x in rows])
-    fig = plt.figure(figsize=(7.0, 1.70))
+    fig = plt.figure(figsize=(7.0, 1.62))
     gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 1.12], wspace=0.34)
 
     ax = fig.add_subplot(gs[0, 0])
@@ -114,20 +114,25 @@ def figure_one_face(r):
             X.extend(v["x"])
             Y.extend(np.abs(np.array(v["y"]) - v["psi_inf"]) / abs(v["C"]))
         X, Y = np.array(X), np.array(Y)
+
+        tag = (f"{label}: $p={o['p']:.2f}$" if o.get("identified", True)
+               else f"{label}: no order")
         ax.loglog(X, Y, mk, color=col, ms=3.2, mfc="white", mew=0.9,
-                  label=f"{label}: $p={o['p']:.2f}$", zorder=3)
+                  label=tag, zorder=3)
         xs = np.linspace(X.min() * 0.8, X.max() * 1.25, 50)
         ax.loglog(xs, xs ** o["p"], "-", color=col, lw=1.0, alpha=0.8, zorder=2)
         npts, nt = o["n"], o["tones"]
     decade_ticks(ax, *ax.get_xlim())
-    ax.set_ylim(max(Y.min() * 0.2, 1e-8), 60.0)
+
+    ax.set_ylim(max(Y.min() * 0.02, 1e-9), 30.0)
     ax.set_xlabel(r"$h/\mu$", labelpad=1.5)
     ax.set_ylabel("scaled distance from extrapolation", labelpad=2.0)
-    ax.legend(loc="upper left", frameon=False, handlelength=1.1,
-              borderpad=0.15, labelspacing=0.28, handletextpad=0.45)
+    ax.legend(loc="lower right", frameon=False, handlelength=1.1,
+              borderpad=0.15, labelspacing=0.25, handletextpad=0.45,
+              fontsize=6.8)
     ax.set_title("(c) pooled grid convergence", fontsize=8.2, pad=3.5)
-    ax.text(0.97, 0.03, f"{npts} points, {nt} frequencies", transform=ax.transAxes,
-            fontsize=6.5, ha="right", va="bottom", color=GREY)
+    ax.text(0.03, 0.97, f"{npts} points, {nt} frequencies", transform=ax.transAxes,
+            fontsize=6.5, ha="left", va="top", color=GREY)
     despine(ax)
 
     for ext in ("pdf", "png"):
@@ -138,7 +143,7 @@ def figure_one_face(r):
 def figure_ratio(r):
 
     dp, dm, ref = r["depth"], r["diameter"], r["reference"]
-    fig = plt.figure(figsize=(7.0, 1.72))
+    fig = plt.figure(figsize=(7.0, 1.64))
     gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 1.05], wspace=0.36)
 
     ax = fig.add_subplot(gs[0, 0])
@@ -230,7 +235,7 @@ def figure_ratio(r):
 def figure_identifiability(r):
 
     idt = r["ident"]
-    fig = plt.figure(figsize=(3.40, 2.15))
+    fig = plt.figure(figsize=(3.40, 1.92))
     ax = fig.add_subplot(1, 1, 1)
     mul = [cp.mu(x["f"]) / cp.CASES["C1"]["th"] for x in idt["rows"]]
     tau = [x["tau"] for x in idt["rows"]]

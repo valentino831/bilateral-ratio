@@ -147,7 +147,7 @@ def convergence_block():
 
 def depth_block():
 
-    cases = cp.DEPTH_SERIES
+    cases = cp.depth_series()
     zs = np.array([cp.CASES[c]["hdepth"] for c in cases])
     rows = []
     for tone, f in cp.common_tones(*cases):
@@ -200,10 +200,12 @@ def diameter_block():
         node.extend(np.abs(np.polyval(np.polyfit(xx, y, 2), xx) - y))
     lo = np.array([r["local"][0] for r in rows])
     hi = np.array([r["local"][-1] for r in rows])
+
+    small_a, small_b = cases[0], cases[2]
     small_move = []
-    for tone, f in cp.common_tones(cases[0], cases[1]):
-        a = abs(cp.read(cases[0], tone)["rho"])
-        b = abs(cp.read(cases[1], tone)["rho"])
+    for tone, f in cp.common_tones(small_a, small_b):
+        a = abs(cp.read(small_a, tone)["rho"])
+        b = abs(cp.read(small_b, tone)["rho"])
         small_move.append(abs(b - a) / a)
     return dict(cases=cases, d=[float(u) for u in ds],
                 node_rms=float(np.sqrt(np.mean(np.square(node)))),
@@ -241,13 +243,13 @@ def extent_block():
 
 def identifiability_block(depth, diam):
 
-    tones = [t for t, _ in cp.common_tones(*cp.DEPTH_SERIES, *cp.diameter_series())]
+    tones = [t for t, _ in cp.common_tones(*cp.depth_series(), *cp.diameter_series())]
     dz_rows = {r["tone"]: r for r in depth["rows"]}
     dd_rows = {r["tone"]: r for r in diam["rows"]}
     tones.sort(key=lambda t: dz_rows[t]["f"])
 
-    raw = np.array([np.angle(cp.read(cp.DEPTH_SERIES[-1], t)["rho"]
-                             / cp.read(cp.DEPTH_SERIES[0], t)["rho"])
+    raw = np.array([np.angle(cp.read(cp.depth_series()[-1], t)["rho"]
+                             / cp.read(cp.depth_series()[0], t)["rho"])
                     for t in tones])
     dphi_z = np.unwrap(raw) / depth["dz"]
 
@@ -289,30 +291,40 @@ def identifiability_block(depth, diam):
                 f_one_best=best["f"], f_one_worst=worst["f"],
                 conds=conds)
 
-def _separable_surface(depth_cases, diam_cases, tones, d_ref, deg_d=None):
+def _separable_surface(depth_cases, diam_cases, tones, d_ref, deg_d=None,
+                       deg_z=None):
 
     def logs(cases, tone):
         ref = cp.read("C1", tone)["rho"]
         return np.array([np.log(cp.read(c, tone)["rho"] / ref) for c in cases])
 
-    zs = np.array([cp.CASES[c]["hdepth"] for c in depth_cases], float)
-    ds = np.array([cp.CASES[c]["hd"] for c in diam_cases], float)
-    o = np.argsort(zs)
-    zs = zs[o]
-    depth_cases = [depth_cases[i] for i in o]
-    deg_z = 2 if len(zs) >= 3 else 1
-
+    z_ref = cp.CASES["C1"]["hdepth"]
+    zs = np.array([cp.CASES[c]["hdepth"] for c in depth_cases], float) - z_ref
+    ds = np.log(np.array([cp.CASES[c]["hd"] for c in diam_cases], float)
+                / d_ref)
+    if deg_z is None:
+        deg_z = 2 if len(zs) >= 3 else 1
     if deg_d is None:
         deg_d = 2 if len(ds) >= 3 else 1
-    x = np.log(ds)
-    cz = {t: np.polyfit(zs, logs(depth_cases, t), deg_z) for t in tones}
-    cd = {t: np.polyfit(x, logs(diam_cases, t), deg_d) for t in tones}
+
+    def through_origin(x, y, deg):
+
+        a = np.stack([x ** k for k in range(1, deg + 1)], axis=1)
+        c, *_ = np.linalg.lstsq(a, y, rcond=None)
+        return c
+
+    cz = {t: through_origin(zs, logs(depth_cases, t), deg_z) for t in tones}
+    cd = {t: through_origin(ds, logs(diam_cases, t), deg_d) for t in tones}
+
+    def poly(c, x):
+        out = np.zeros_like(np.asarray(x, dtype=complex))
+        for k, ck in enumerate(c, 1):
+            out = out + ck * np.asarray(x) ** k
+        return out
 
     def predict(tone, z, d):
-        base = np.polyval(cz[tone], z)
-        corr = (np.polyval(cd[tone], np.log(d))
-                - np.polyval(cd[tone], np.log(d_ref)))
-        return base + corr
+        return (poly(cz[tone], np.asarray(z) - z_ref)
+                + poly(cd[tone], np.log(np.asarray(d) / d_ref)))
 
     return predict
 
@@ -324,7 +336,7 @@ def estimate(target, depth_cases, diam_cases, tones, unc, d_ref):
 
     predict = _separable_surface(depth_cases, diam_cases, tones, d_ref)
     meas = {t: measured(target, t) for t in tones}
-    zs = [cp.CASES[c]["hdepth"] for c in cp.DEPTH_SERIES]
+    zs = [cp.CASES[c]["hdepth"] for c in cp.depth_series()]
     ds = [cp.CASES[c]["hd"] for c in cp.diameter_series()]
     zg = np.linspace(min(zs), max(zs), 1401)
     dg = np.exp(np.linspace(np.log(min(ds)), np.log(max(ds)), 561))
@@ -347,10 +359,10 @@ def estimate(target, depth_cases, diam_cases, tones, unc, d_ref):
 
 def estimation_block(unc):
 
-    tones = [t for t, _ in cp.common_tones(*cp.DEPTH_SERIES, *cp.diameter_series())]
+    tones = [t for t, _ in cp.common_tones(*cp.depth_series(), *cp.diameter_series())]
     f_of = {round(cp.read("C1", t)["f"], 4): t for t in tones}
     d_ref = cp.CASES["C1"]["hd"]
-    dep, dia = list(cp.DEPTH_SERIES), list(cp.diameter_series())
+    dep, dia = cp.depth_series(), list(cp.diameter_series())
 
     def shared(case):
 
@@ -385,8 +397,8 @@ def estimation_block(unc):
 
 def surrogate_probe(unc):
 
-    tones = [t for t, _ in cp.common_tones(*cp.DEPTH_SERIES, *cp.diameter_series())]
-    dep, dia = list(cp.DEPTH_SERIES), cp.diameter_series()
+    tones = [t for t, _ in cp.common_tones(*cp.depth_series(), *cp.diameter_series())]
+    dep, dia = cp.depth_series(), cp.diameter_series()
     d_ref = cp.CASES["C1"]["hd"]
     ds = np.array([cp.CASES[c]["hd"] for c in dia])
     out = {}
@@ -413,12 +425,12 @@ def surrogate_probe(unc):
 
 def profiled_residual(depth, diam, tones, unc):
 
-    predict = _separable_surface(list(cp.DEPTH_SERIES), list(cp.diameter_series()),
+    predict = _separable_surface(cp.depth_series(), list(cp.diameter_series()),
                                  tones if isinstance(tones, list)
                                  else sorted({t for v in tones.values()
                                               for t in v}),
                                  cp.CASES["C1"]["hd"])
-    zs = np.array([cp.CASES[c]["hdepth"] for c in cp.DEPTH_SERIES])
+    zs = np.array([cp.CASES[c]["hdepth"] for c in cp.depth_series()])
     ds = np.array([cp.CASES[c]["hd"] for c in cp.diameter_series()])
     zg = np.linspace(zs.min(), zs.max(), 1200)
     dg = np.exp(np.linspace(np.log(ds.min()), np.log(ds.max()), 400))
@@ -500,6 +512,295 @@ def budget_block(depth, conv):
                 d_smallest=cp.CASES["F1"]["hd"],
                 dz_numerical_um=float(1e3 * np.log(1 + conv["declared_uncertainty"]) / S))
 
+def timestep_block():
+
+    def R(defect, sound, tone):
+        a = cp.read(defect, tone)["rho"]
+        return a
+
+    band = []
+    for tone, f in cp.tones_of("A64"):
+        r32 = cp.read("C1", tone)["rho"]
+        r64 = cp.read("A64", tone)["rho"]
+
+        e = 2.0 * np.log(r32 / r64)
+        band.append(dict(tone=tone, f=f, rel=float(e.real),
+                         deg=float(np.degrees(e.imag))))
+    band.sort(key=lambda x: x["f"])
+
+    pair = []
+    for tone in ("F02", "T180"):
+        r32 = cp.read("C1", tone)["rho"]
+        r64 = cp.read("A64", tone)["rho"]
+        d32 = cp.read("D1", tone)["rho"]
+        d64 = cp.read("C64", tone)["rho"]
+        e_abs = 2.0 * np.log(r32 / r64)
+        e_use = 2.0 * (np.log(d32 / r32) - np.log(d64 / r64))
+        pair.append(dict(tone=tone, f=cp.read("C1", tone)["f"],
+                         abs=float(abs(e_abs)), use=float(abs(e_use))))
+
+    tones = [t for t, _ in cp.common_tones(*cp.depth_series(),
+                                           *cp.diameter_series())]
+    predict = _separable_surface(cp.depth_series(), cp.diameter_series(),
+                                 tones, cp.CASES["C1"]["hd"])
+    zg = np.linspace(0.8, 5.0, 4201)
+    sel = [t for t, _ in cp.tones_of("C64")]
+
+    def invert_z(get):
+        crit = np.zeros_like(zg)
+        for t in sel:
+            crit += np.abs(predict(t, zg, cp.CASES["D1"]["hd"]) - get(t)) ** 2
+        j = int(np.argmin(crit))
+        return float(zg[j]), float(np.sqrt(crit[j] / len(sel)))
+
+    z32, res32 = invert_z(lambda t: measured("D1", t))
+    z64, res64 = invert_z(lambda t: np.log(cp.read("C64", t)["rho"]
+                                           / cp.read("A64", t)["rho"]))
+    return dict(band=band, pair=pair,
+                rel_max=max(abs(b["rel"]) for b in band),
+                deg_max=max(abs(b["deg"]) for b in band),
+                use_max=max(p["use"] for p in pair),
+                z_shift=abs(z64 - z32), res32=res32, res64=res64)
+
+def misalignment_block(unc):
+
+    tones = [t for t, _ in cp.common_tones(*cp.depth_series(),
+                                           *cp.diameter_series())]
+    predict = _separable_surface(cp.depth_series(), cp.diameter_series(),
+                                 tones, cp.CASES["C1"]["hd"])
+    zg = np.linspace(0.8, 5.0, 2101)
+    dg = np.exp(np.linspace(np.log(0.3), np.log(5.0), 601))
+    Z, D = np.meshgrid(zg, dg, indexing="ij")
+    cases = [c for c in cp.CASES if c.startswith("O") and c.endswith("1")]
+    cases.sort(key=lambda c: cp.CASES[c]["spotx"])
+    rows = []
+    for cid in cases:
+        if not cp.registry().get(cid):
+            continue
+        sel = [t for t, _ in cp.tones_of(cid)]
+        crit = np.zeros_like(Z)
+        for t in sel:
+            m = np.log(cp.read(cid, t, point=(0.0, cp.CASES[cid]["spoty"]))["rho"]
+                       / cp.read("C1", t)["rho"])
+            crit += np.abs(predict(t, Z, D) - m) ** 2
+        i = np.unravel_index(np.argmin(crit), crit.shape)
+        rows.append(dict(cid=cid, x=cp.CASES[cid]["spotx"],
+                         z_hat=float(zg[i[0]]), d_hat=float(dg[i[1]]),
+                         residual=float(np.sqrt(crit[i] / len(sel))),
+                         at_edge=bool(i[0] in (0, len(zg) - 1)
+                                      or i[1] in (0, len(dg) - 1))))
+    z_true = cp.CASES["C1"]["hdepth"]
+    near = [r for r in rows if abs(r["x"]) <= 2.0 and r["x"] != 0]
+    return dict(rows=rows, unc=unc,
+                z_err_aligned=float(1e3 * abs(
+                    [r for r in rows if r["x"] == 0][0]["z_hat"] - z_true)),
+                z_err_two=float(1e3 * max(abs(r["z_hat"] - z_true)
+                                          for r in near)),
+                res_two=float(max(r["residual"] for r in near)))
+
+def scaled_plate_block():
+
+    rows = []
+    for t5, t10, _ in cp.pair_by_group("SC1", "GA"):
+        a, b = cp.read("SC1", t5), cp.read("GA", t10)
+        rows.append(dict(mu_over_L=a["mu"] / cp.CASES["SC1"]["th"],
+                         rho5=abs(a["rho"]), rho10=abs(b["rho"]),
+                         rel=float(abs(abs(a["rho"]) - abs(b["rho"]))
+                                   / abs(b["rho"])),
+                         dphase=float(abs(np.degrees(
+                             np.angle(a["rho"] / b["rho"]))))))
+    return dict(rows=rows, rel_max=max(r["rel"] for r in rows),
+                dphase_max=max(r["dphase"] for r in rows))
+
+def material_block():
+
+    fe = dict(cp.tones_of("C1"))
+    rows = []
+    for tag, f_al in cp.tones_of("AL1"):
+        t_fe = next(t for t in fe if t[1:] == tag[1:])
+        a, b = cp.read("C1", t_fe), cp.read("AL1", tag)
+        rows.append(dict(f_fe=a["f"], f_al=b["f"], mu=b["mu"],
+                         rel=float(abs(abs(a["rho"]) - abs(b["rho"]))
+                                   / abs(a["rho"])),
+                         dphase=float(abs(np.degrees(
+                             np.angle(b["rho"] / a["rho"]))))))
+    bi_fe = cp.HCONV * cp.CASES["C1"]["th"] * 1e-3 / cp.K_STEEL
+    bi_al = cp.HCONV * cp.CASES["C1"]["th"] * 1e-3 / cp.K_AL
+    return dict(rows=rows, rel_max=max(r["rel"] for r in rows),
+                rel_min=min(r["rel"] for r in rows),
+                dphase_max=max(r["dphase"] for r in rows),
+                alpha_ratio=cp.ALPHA_AL / cp.ALPHA, bi_fe=bi_fe, bi_al=bi_al)
+
+def _inversion_grid(nz=701, nd=331):
+
+    tones = [t for t, _ in cp.common_tones(*cp.depth_series(),
+                                           *cp.diameter_series())]
+    predict = _separable_surface(cp.depth_series(), cp.diameter_series(),
+                                 tones, cp.CASES["C1"]["hd"])
+    zs = [cp.CASES[c]["hdepth"] for c in cp.depth_series()]
+    ds = [cp.CASES[c]["hd"] for c in cp.diameter_series()]
+    zg = np.linspace(min(zs) - 0.25, max(zs) + 0.75, nz)
+    dg = np.exp(np.linspace(np.log(min(ds) - 0.1), np.log(max(ds) + 0.5), nd))
+    Z, D = np.meshgrid(zg, dg, indexing="ij")
+    P = {t: predict(t, Z, D) for t in tones}
+    A = sum(np.abs(P[t]) ** 2 for t in tones)
+
+    def invert(m):
+        c = A - 2.0 * np.real(sum(np.conj(P[t]) * m[t] for t in tones))
+        i = np.unravel_index(np.argmin(c), c.shape)
+        return float(zg[i[0]]), float(dg[i[1]])
+
+    return tones, predict, invert
+
+def noise_block(n_draw=300, levels=(1, 3, 10), seed=0):
+
+    tones, _, invert = _inversion_grid()
+    sigma = cp.noise_floor() * 1e-3
+    rng = np.random.default_rng(seed)
+    ref = {t: cp.read("C1", t)["rho"] for t in tones}
+    out = []
+    for cid in ("C1", "V1", "W1"):
+        base = {t: cp.read(cid, t) for t in tones}
+        z_true = cp.CASES[cid]["hdepth"]
+        d_true = cp.CASES[cid]["hd"]
+        z0, d0 = invert({t: np.log(base[t]["rho"] / ref[t]) for t in tones})
+        for k in levels:
+            s = sigma * k * np.sqrt(2.0)
+            zs = np.empty(n_draw)
+            dd = np.empty(n_draw)
+            for n in range(n_draw):
+                m = {}
+                for t in tones:
+                    dr = base[t]["d_refl"] + s * (rng.normal() + 1j * rng.normal())
+                    dt = base[t]["d_tran"] + s * (rng.normal() + 1j * rng.normal())
+                    m[t] = np.log((dr / dt) / ref[t])
+                zs[n], dd[n] = invert(m)
+            out.append(dict(cid=cid, level=k, z_true=z_true, d_true=d_true,
+                            z_clean=z0, d_clean=d0,
+                            z_bias=float(zs.mean() - z0),
+                            z_std=float(zs.std()),
+                            d_bias=float((dd.mean() - d0) / d_true),
+                            d_std=float(dd.std() / d_true)))
+    ref_row = [o for o in out if o["cid"] == "C1" and o["level"] == 1][0]
+    return dict(rows=out, sigma_mK=cp.noise_floor(), n_draw=n_draw,
+                z_std_nominal=max(o["z_std"] for o in out if o["level"] == 1),
+                z_std_ten=max(o["z_std"] for o in out if o["level"] == 10),
+                ref=ref_row)
+
+def model_error_block():
+
+    tones, _, invert = _inversion_grid(nz=2001, nd=601)
+    fs = np.array([cp.read("C1", t)["f"] for t in tones])
+    o = np.argsort(fs)
+    tones = [tones[i] for i in o]
+    fs = fs[o]
+    lf = np.log(fs)
+
+    def shifted(cid, factor):
+
+        rho = np.array([cp.read(cid, t)["rho"] for t in tones])
+        lr = np.log(np.abs(rho))
+        ph = np.unwrap(np.angle(rho))
+        target = np.clip(lf + np.log(factor), lf[0], lf[-1])
+        lr_s = np.interp(target, lf, lr)
+        ph_s = np.interp(target, lf, ph)
+        ref = np.array([cp.read("C1", t)["rho"] for t in tones])
+        lr_r = np.log(np.abs(ref))
+        ph_r = np.unwrap(np.angle(ref))
+        return {t: (lr_s[i] - lr_r[i]) + 1j * (ph_s[i] - ph_r[i])
+                for i, t in enumerate(tones)}
+
+    rows = []
+    for cid in ("C1", "V1"):
+        z0, d0 = invert(shifted(cid, 1.0))
+        for label, eps in (("alpha", 0.05), ("alpha", 0.10),
+                           ("thickness", 0.02), ("thickness", 0.05)):
+            if label == "alpha":
+
+                factor = 1.0 / (1.0 + eps)
+                m = shifted(cid, factor)
+            else:
+
+                factor = (1.0 + eps) ** 2
+                m = shifted(cid, factor)
+            z, d = invert(m)
+            rows.append(dict(cid=cid, what=label, eps=eps,
+                             dz=float(1e3 * (z - z0)),
+                             dd=float(100 * (d - d0) / cp.CASES[cid]["hd"])))
+    return dict(rows=rows,
+                dz_alpha5=max(abs(x["dz"]) for x in rows
+                              if x["what"] == "alpha" and x["eps"] == 0.05),
+                dz_alpha10=max(abs(x["dz"]) for x in rows
+                               if x["what"] == "alpha" and x["eps"] == 0.10),
+                dz_thick2=max(abs(x["dz"]) for x in rows
+                              if x["what"] == "thickness" and x["eps"] == 0.02),
+                dz_thick5=max(abs(x["dz"]) for x in rows
+                              if x["what"] == "thickness" and x["eps"] == 0.05))
+
+def _dphi_at_spot(cid, tone):
+
+    c = cp.CASES[cid]
+    ba, _ = cp.registry()[cid][tone]
+    xyz = cp.stores()[ba][f"{cid}_{tone}_xyz"]
+    front, _ = cp.face_masks(xyz, c["th"])
+    d = cp.phase_contrast(cid, tone)
+    p = xyz[front] * 1e3
+    q = (p[:, 0] - c.get("spotx", 0.0)) ** 2 + (p[:, 1] - c["spoty"]) ** 2
+    return float(d[front][int(np.argmin(q))])
+
+def _cross(xs, ys):
+
+    for i in range(len(xs) - 1):
+        if np.isfinite(ys[i]) and np.isfinite(ys[i + 1]) and ys[i] * ys[i + 1] < 0:
+            t = (0.0 - ys[i]) / (ys[i + 1] - ys[i])
+            return float(np.exp(np.log(xs[i]) + t * (np.log(xs[i + 1])
+                                                     - np.log(xs[i]))))
+    return None
+
+def benchmark_block():
+
+    cases = list(cp.depth_series()) + ["V1", "W1"]
+    tones = [t for t, _ in cp.tones_of("C1")]
+    fs = np.array([cp.read("C1", t)["f"] for t in tones])
+    o = np.argsort(fs)
+    tones = [tones[i] for i in o]
+    fs = fs[o]
+
+    blind = {}
+    for cid in cases:
+        y = np.array([_dphi_at_spot(cid, t) for t in tones])
+        blind[cid] = _cross(fs, y)
+
+    k = cp.CASES["C1"]["hdepth"] / cp.mu(blind["C1"])
+
+    widths = {cid: np.array([cp.fwhm_along_x(
+        *(lambda tr: (tr[1], np.abs(cp.phase_contrast(cid, t)),
+                      cp.face_masks(tr[1], cp.CASES[cid]["th"])[1],
+                      cp.CASES[cid]["spoty"]))(cp.differential(cid, t)))[0]
+        for t in tones]) for cid in cases}
+
+    f_cal = _cross(fs, widths["C1"] - cp.CASES["C1"]["hd"])
+    lf = np.log(fs)
+
+    rows = []
+    for cid in cases:
+        zt = cp.CASES[cid]["hdepth"]
+        dt = cp.CASES[cid]["hd"]
+        z_hat = k * cp.mu(blind[cid]) if blind[cid] else None
+        w = float(np.exp(np.interp(np.log(f_cal), lf, np.log(widths[cid]))))
+        rows.append(dict(cid=cid, z_true=zt, d_true=dt, f_blind=blind[cid],
+                         z_hat=z_hat, z_err=None if z_hat is None
+                         else float(1e3 * (z_hat - zt)),
+                         d_hat=w, d_err=float(100 * (w - dt) / dt)))
+    held = [x for x in rows if x["cid"] in ("V1", "W1")]
+    return dict(rows=rows, k=float(k), f_cal=float(f_cal),
+                z_err_max=max(abs(x["z_err"]) for x in held),
+                d_err_max=max(abs(x["d_err"]) for x in held),
+                k_min=float(min(cp.CASES[x["cid"]]["hdepth"]
+                                / cp.mu(x["f_blind"]) for x in rows)),
+                k_max=float(max(cp.CASES[x["cid"]]["hdepth"]
+                                / cp.mu(x["f_blind"]) for x in rows)))
+
 def compute():
     r = {}
     r["geometry"] = geometry()
@@ -522,6 +823,13 @@ def compute():
     r["probe"] = surrogate_probe(unc)
     r["similarity"] = similarity_block()
     r["budget"] = budget_block(r["depth"], r["convergence"])
+    r["timestep"] = timestep_block()
+    r["misalignment"] = misalignment_block(unc)
+    r["scaled"] = scaled_plate_block()
+    r["material"] = material_block()
+    r["noise"] = noise_block()
+    r["model_error"] = model_error_block()
+    r["benchmark"] = benchmark_block()
     return r
 
 def _num(x, dec):
@@ -554,11 +862,18 @@ def latex_macros(r):
     put("GeoChanA", _num(G["chan_y0"], 0))
     put("GeoChanB", _num(G["chan_y1"], 0))
     put("GeoClear", _num(G["clearance"], 2))
+    put("RatioRef", _num(G["diameter"] / G["clearance"], 2))
+    put("DmuTop", _num(G["diameter"] / cp.mu(r["reference"]["f_max"]), 2))
 
     put("Nruns", f"{c['n_runs']}")
     put("Nbatches", f"{c['n_batches']}")
     put("Alpha", f"{c['alpha']:.2e}".replace("e-0", "\\times 10^{-") + "}")
+    put("Kcond", _num(cp.K_STEEL, 0))
+    put("RhoDens", _num(cp.RHO_STEEL, 0))
+    put("Cheat", _num(cp.CP_STEEL, 0))
+    put("Cvol", f"{cp.CV_STEEL:.2e}".replace("e+0", "\\times 10^{") + "}")
     put("NoiseFloor", _num(c["noise_mK"], 3))
+    put("Qmax", _num(cp.QMAX / 1e3, 0))
     put("Netd", _num(c["netd_mK"], 0))
     put("Fps", _num(c["fps"], 0))
     put("Duration", _num(c["duration"], 0))
@@ -636,10 +951,15 @@ def latex_macros(r):
     put("ConvXmax", _num(lin["x_max"], 2))
     put("ConvXspan", _num(lin["x_max"] / lin["x_min"], 0))
     for tag, o in (("Rho", lin), ("Drefl", dr), ("Dtran", dt)):
-        put(f"P{tag}", _num(o["p"], 2))
+
+        ok = o.get("identified", True)
+        put(f"P{tag}", _num(o["p"], 2) if ok else "n/a")
         put(f"P{tag}Lo", _num(o["lo"], 2))
         put(f"P{tag}Hi", _num(o["hi"], 2))
-        put(f"Err{tag}", _num(100 * o["err_median"], 2))
+        put(f"P{tag}Int", (f"$[{_num(o['lo'], 2)},\\,{_num(o['hi'], 2)}]$"
+                           if ok else "n/a"))
+        put(f"Err{tag}", _num(100 * o["err_median"], 2) if ok else "n/a")
+        put(f"Chg{tag}", _num(100 * o["change"]["median"], 1))
     put("ErrRhoMin", _num(100 * lin["err_min"], 2))
     put("ErrRhoMax", _num(100 * lin["err_max"], 2))
     put("PRhoNN", _num(nn["p"], 2))
@@ -740,6 +1060,67 @@ def latex_macros(r):
             put(f"Derr{tag}", _num(max(abs(p["d_hi"] - dtrue),
                                        abs(dtrue - p["d_lo"])), 2))
 
+    ts = r["timestep"]
+    put("StepRelMax", _num(100 * ts["rel_max"], 1))
+    put("StepDegMax", _num(ts["deg_max"], 1))
+    put("StepUseMax", _num(100 * ts["use_max"], 1))
+    put("StepZshift", _num(1e3 * ts["z_shift"], 0))
+    put("StepResIn", _num(100 * ts["res32"], 1))
+    put("StepResOut", _num(100 * ts["res64"], 1))
+    put("StepRelTop", _num(100 * abs(ts["band"][-1]["rel"]), 1))
+    put("StepDegTop", _num(abs(ts["band"][-1]["deg"]), 1))
+    put("StepRelBot", _num(100 * abs(ts["band"][0]["rel"]), 1))
+
+    mi = r["misalignment"]
+    put("MisZaligned", _num(mi["z_err_aligned"], 0))
+    put("MisZtwo", _num(mi["z_err_two"], 0))
+    put("MisResTwo", _num(100 * mi["res_two"], 1))
+
+    sc = r["scaled"]
+    put("ScaledRelMax", _num(100 * sc["rel_max"], 1))
+    put("ScaledDegMax", _num(sc["dphase_max"], 1))
+    put("ScaledN", f"{len(sc['rows'])}")
+
+    ma = r["material"]
+    put("MatRelMin", _num(100 * ma["rel_min"], 2))
+    put("MatRelMax", _num(100 * ma["rel_max"], 2))
+    put("MatDegMax", _num(ma["dphase_max"], 2))
+    put("MatAlphaRatio", _num(ma["alpha_ratio"], 1))
+    put("MatFmin", _num(ma["rows"][0]["f_al"], 2))
+    put("MatFmax", _num(ma["rows"][-1]["f_al"], 1))
+    put("MatBiFe", f"{ma['bi_fe']:.1e}".replace("e-0", "\\times 10^{-") + "}")
+    put("MatBiAl", f"{ma['bi_al']:.1e}".replace("e-0", "\\times 10^{-") + "}")
+    put("MatKal", _num(cp.K_AL, 0))
+    put("MatRhoAl", _num(cp.RHO_AL, 0))
+    put("MatCal", _num(cp.CP_AL, 0))
+
+    bm = r["benchmark"]
+    put("BenchK", _num(bm["k"], 3))
+    put("BenchKmin", _num(bm["k_min"], 3))
+    put("BenchKmax", _num(bm["k_max"], 3))
+    put("BenchFcal", _num(bm["f_cal"], 2))
+    put("BenchZerrMax", _num(bm["z_err_max"], 0))
+    put("BenchDerrMax", _num(bm["d_err_max"], 0))
+    for x in bm["rows"]:
+        if x["cid"] in ("V1", "W1"):
+            tag = "Deep" if x["cid"] == "V1" else "Shal"
+            put(f"Bench{tag}Zerr", _num(abs(x["z_err"]), 0))
+            put(f"Bench{tag}Derr", _num(abs(x["d_err"]), 0))
+
+    nz = r["noise"]
+    put("NoiseSigma", _num(nz["sigma_mK"], 3))
+    put("NoiseZstd", _num(1e3 * nz["z_std_nominal"], 0))
+    put("NoiseZstdTen", _num(1e3 * nz["z_std_ten"], 0))
+    put("NoiseZstdRef", _num(1e3 * nz["ref"]["z_std"], 0))
+    put("NoiseDstdRef", _num(100 * nz["ref"]["d_std"], 1))
+    put("NoiseDraws", f"{nz['n_draw']}")
+
+    me = r["model_error"]
+    put("ModelZalphaFive", _num(me["dz_alpha5"], 0))
+    put("ModelZalphaTen", _num(me["dz_alpha10"], 0))
+    put("ModelZthickTwo", _num(me["dz_thick2"], 0))
+    put("ModelZthickFive", _num(me["dz_thick5"], 0))
+
     put("SimRelMin", _num(100 * sm["rel_min"], 1))
     put("SimRelMax", _num(100 * sm["rel_max"], 1))
     put("SimPhaseMax", _num(sm["dphase_max"], 1))
@@ -780,6 +1161,31 @@ def latex_tables(r):
             _num(x["peak_refl"], 2), _num(x["peak_tran"], 2),
             w_r, _num(x["width_tran"], 2), _num(x["abs_rho"], 3)]) + r" \\")
     out["ReferenceBand"] = "\n    ".join(rows)
+
+    out["TimeStep"] = "\n    ".join(
+        f"{b['f']:g} & {100*b['rel']:+.1f} & {b['deg']:+.2f}" + r" \\"
+        for b in r["timestep"]["band"])
+
+    out["Benchmark"] = "\n    ".join(
+        f"{x['cid']} & {x['z_true']:.2f} & {x['z_hat']:.2f} & {x['z_err']:+.0f} & "
+        f"{x['d_true']:.2f} & {x['d_hat']:.2f} & {x['d_err']:+.0f}" + r" \\"
+        for x in r["benchmark"]["rows"])
+
+    out["Noise"] = "\n    ".join(
+        f"{x['cid']} & {x['level']} & {1e3*x['z_bias']:+.0f} & {1e3*x['z_std']:.0f} & "
+        f"{100*x['d_bias']:+.1f} & {100*x['d_std']:.1f}" + r" \\"
+        for x in r["noise"]["rows"])
+
+    sym = {"alpha": r"$\alpha$", "thickness": "$L$"}
+    out["ModelError"] = "\n    ".join(
+        x["cid"] + " & " + sym[x["what"]] + " & "
+        + f"{100*x['eps']:.0f} & {x['dz']:+.0f} & {x['dd']:+.1f}" + r" \\"
+        for x in r["model_error"]["rows"])
+
+    out["Misalign"] = "\n    ".join(
+        f"{x['x']:+g} & {x['z_hat']:.2f} & {x['d_hat']:.2f} & "
+        f"{100*x['residual']:.1f}" + r" \\"
+        for x in r["misalignment"]["rows"])
 
     dm = r["diameter"]
     tone_idx = [0, len(dm["rows"]) // 2, len(dm["rows"]) - 1]

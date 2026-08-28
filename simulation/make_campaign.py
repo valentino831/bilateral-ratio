@@ -14,10 +14,13 @@ RUNROOT = os.path.join(ROOT, "runs")
 QMAX = 35000.0
 
 def case(cid, note, th=5, lxp=80, hd=2.0, hdepth=2.50, hy0=5, hy1=15, spoty=9,
-         spotx=0, defect=1, esz=1.0, fref=0, asz=0, twin=None, tones=None):
+         spotx=0, defect=1, esz=1.0, fref=0, asz=0, twin=None, tones=None,
+         lyp=None, spotr=None, npp=32, kmat=None, rmat=None, cmat=None):
     return dict(id=cid, note=note, th=th, lxp=lxp, hd=hd, hdepth=hdepth,
                 hy0=hy0, hy1=hy1, spoty=spoty, spotx=spotx, defect=defect,
-                esz=esz, fsz=esz, fref=fref, asz=asz, twin=twin, tones=tones)
+                esz=esz, fsz=esz, fref=fref, asz=asz, twin=twin, tones=tones,
+                lyp=lyp, spotr=spotr, npp=npp,
+                kmat=kmat, rmat=rmat, cmat=cmat)
 
 def band(c):
 
@@ -145,20 +148,71 @@ DIAMETRI2 = [
 ]
 
 SPOT_X = [-6, -4, -2, 0, 2, 4, 6]
+
+SPOT_TAG = "ABDEFGH"
 SORGENTE = []
 for _i, _x in enumerate(SPOT_X):
-    _t = f"{_i}"
+    _t = SPOT_TAG[_i]
     SORGENTE += [
-        _f(cid=f"SX{_t}1", note=f"spot at x = {_x} mm", spotx=_x,
-           twin=f"SX{_t}0", tones=BAND5),
-        _f(cid=f"SX{_t}0", note=f"sound twin, spot at x = {_x} mm",
+        _f(cid=f"O{_t}1", note=f"spot at x = {_x} mm", spotx=_x,
+           twin=f"O{_t}0", tones=BAND5),
+        _f(cid=f"O{_t}0", note=f"sound twin, spot at x = {_x} mm",
            spotx=_x, defect=0, tones=BAND5),
     ]
+
+PASSO = [
+    _f(cid="A64", note="reference specimen, 64 substeps", npp=64, twin="B64",
+       tones=BAND9),
+    _f(cid="B64", note="sound twin, 64 substeps", npp=64, defect=0,
+       tones=BAND9),
+    _f(cid="A28", note="reference specimen, 128 substeps", npp=128, twin="B28",
+       tones=[("T180", 1.80), ("F02", 0.2)]),
+    _f(cid="B28", note="sound twin, 128 substeps", npp=128, defect=0,
+       tones=[("T180", 1.80), ("F02", 0.2)]),
+    _f(cid="C64", note="deep inclusion, 64 substeps", hdepth=3.75, npp=64,
+       twin="E64", tones=[("T180", 1.80), ("F02", 0.2)]),
+    _f(cid="E64", note="sound twin of C64", hdepth=3.75, npp=64, defect=0,
+       tones=[("T180", 1.80), ("F02", 0.2)]),
+    _f(cid="C28", note="deep inclusion, 128 substeps", hdepth=3.75, npp=128,
+       twin="E28", tones=[("T180", 1.80)]),
+    _f(cid="E28", note="sound twin of C28", hdepth=3.75, npp=128, defect=0,
+       tones=[("T180", 1.80)]),
+]
+
+PROFONDITA = [
+    _f(cid="H1", note="depth 1.875 mm", hdepth=1.875, twin="H0",
+       tones=BAND9),
+    _f(cid="H0", note="sound twin of H1", hdepth=1.875, defect=0,
+       tones=BAND9),
+    _f(cid="T1", note="depth 3.125 mm", hdepth=3.125, twin="T0",
+       tones=BAND9),
+    _f(cid="T0", note="sound twin of T1", hdepth=3.125, defect=0,
+       tones=BAND9),
+]
+
+G10B = [
+    case("GA", "10 mm plate, every length scaled", th=10, lxp=160, lyp=60,
+         hd=4.0, hdepth=5.00, hy0=10, hy1=30, spoty=18, spotr=8, esz=2.0,
+         twin="GB"),
+    case("GB", "sound twin of GA", th=10, lxp=160, lyp=60, hd=4.0,
+         hdepth=5.00, hy0=10, hy1=30, spoty=18, spotr=8, esz=2.0, defect=0),
+]
+
+ALPHA_RATIO = (170.0 / (2700.0 * 900.0)) / (30.0 / (7850.0 * 500.0))
+
+ALBAND = [("A" + _tag[1:], round(_f0 * ALPHA_RATIO, 3)) for _tag, _f0 in BAND9]
+ALLUMINIO = [
+    _f(cid="AL1", note="aluminium alloy, band scaled", twin="AL0",
+       tones=ALBAND, kmat=170.0, rmat=2700.0, cmat=900.0),
+    _f(cid="AL0", note="sound twin of AL1", defect=0, tones=ALBAND,
+       kmat=170.0, rmat=2700.0, cmat=900.0),
+]
 
 BATCHES = {"conv": CONV, "conv2": CONV2, "conv3": CONV3,
            "banda": BANDA, "diametri": DIAMETRI, "diametri2": DIAMETRI2,
            "fisica": FISICA, "g10": G10, "cieco": CIECO,
-           "sorgente": SORGENTE}
+           "sorgente": SORGENTE, "passo": PASSO, "profondita": PROFONDITA,
+           "g10b": G10B, "alluminio": ALLUMINIO}
 
 MESHTESTS = ["MESHT1", "MESHT2", "MESHT3", "MESHT4", "MESHT5"]
 
@@ -168,6 +222,8 @@ BANDS = {
 }
 
 COMMON = dict(LYP=30, HXP=0, SPOTX=0, SPOTR=4, HCONV=10, TAMB=20)
+
+MATERIAL = dict(k=30.0, rho=7850.0, c=500.0)
 
 def win(*parts):
 
@@ -197,7 +253,7 @@ def write_case(c, tag, freq, tail, outdir, workdir):
         ! --- geometry and mesh, EVERY parameter written out --------------
         TH     = {c['th']}
         LXP    = {c['lxp']}
-        LYP    = {COMMON['LYP']}
+        LYP    = {c.get('lyp') or COMMON['LYP']}
         HD     = {c['hd']}
         HDEPTH = {c['hdepth']}
         HXP    = {COMMON['HXP']}
@@ -205,7 +261,7 @@ def write_case(c, tag, freq, tail, outdir, workdir):
         HY1    = {c['hy1']}
         SPOTX  = {c.get('spotx', COMMON['SPOTX'])}
         SPOTY  = {c['spoty']}
-        SPOTR  = {COMMON['SPOTR']}
+        SPOTR  = {c.get('spotr') or COMMON['SPOTR']}
         DEFECT = {c['defect']}
         ESZ    = {c['esz']}
         FSZ    = {c['fsz']}
@@ -213,11 +269,15 @@ def write_case(c, tag, freq, tail, outdir, workdir):
         ASZ    = {c['asz']}
         HCONV  = {COMMON['HCONV']}
         TAMB   = {COMMON['TAMB']}
+        KMAT   = {c.get('kmat') or MATERIAL['k']}
+        RMAT   = {c.get('rmat') or MATERIAL['rho']}
+        CMAT   = {c.get('cmat') or MATERIAL['c']}
         /INPUT,BUILD_PLATE,mac
 
         ! --- run ----------------------------------------------------------
         RUNID = '{runid}'
         FREQ  = {freq}
+        NPP   = {c['npp']}
         QMAX  = {QMAX}
         ZBACK = {c['th']/1000.0}
         """)
@@ -241,10 +301,10 @@ def build(batch):
 
     if batch == "conv":
         c0 = dict(cases[0], id="OUTT", defect=1, twin=None,
-                  note="diagnostica, OUTRES senza componente")
+                  note="diagnostic, OUTRES without a component")
         tag, freq = band(c0)[0]
         patched = tail.replace("OUTRES, NSOL, NSKIP, FACCE",
-                               "OUTRES, NSOL, NSKIP        ! senza componente")
+                               "OUTRES, NSOL, NSKIP        ! without a component")
         if patched == tail:
             raise RuntimeError("OUTRES line not found in RUN_1F.inp")
         runid = write_case(c0, tag, freq, patched, outdir, workdir)
@@ -300,11 +360,11 @@ def build(batch):
     with open(os.path.join(RUNROOT, "run_all_batches.bat"), "w",
               newline="\r\n") as fh:
         fh.write("@echo off\r\n")
-        fh.write("echo Runs conv, then fisica, then g10. This takes hours.\r\n")
+        fh.write("echo Runs every batch in turn. This takes days.\r\n")
         for name in BATCHES:
             fh.write(f"echo ############ batch {name} ############\r\n")
             fh.write(f'call "%~dp0{name}\\run_all.bat" < nul\r\n')
-        fh.write("echo Done. Now the three check_campaign.py\r\n")
+        fh.write("echo Done. Now run check_campaign.py on each batch\r\n")
         fh.write("pause\r\n")
 
     print(f"batch '{batch}': {len(runids)} runs in {outdir}")

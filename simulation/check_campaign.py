@@ -88,7 +88,7 @@ def check_one(c, tag, freq, dirpath):
 
     mf = np.abs(r["xyz"][:, 2] - c["th"]/1000.0) < 1e-6
     mb = np.abs(r["xyz"][:, 2]) < 1e-6
-    nexp = NODE_FACTOR * c["lxp"] * 30 / (c["fsz"] ** 2)
+    nexp = NODE_FACTOR * c["lxp"] * (c.get("lyp") or 30) / (c["fsz"] ** 2)
     for name, m in (("excited", mf), ("rear", mb)):
         if m.sum() < 0.7 * nexp:
             bad.append(f"{name} face too coarse: {int(m.sum())} nodes, "
@@ -107,9 +107,10 @@ def check_one(c, tag, freq, dirpath):
         w = np.abs(r["ph"][mf]) ** 4
         yc = (r["xyz"][mf, 1] * w).sum() / w.sum() * 1e3
         xc = (r["xyz"][mf, 0] * w).sum() / w.sum() * 1e3
-        if abs(yc - c["spoty"]) > 2.0 or abs(xc) > 2.0:
+        xs = c.get("spotx", 0) or 0
+        if abs(yc - c["spoty"]) > 2.0 or abs(xc - xs) > 2.0:
             bad.append(f"spot at ({xc:+.1f},{yc:+.1f}) "
-                       f"instead of (0,{c['spoty']})")
+                       f"instead of ({xs:+.1f},{c['spoty']})")
 
     frac = r["n_ok"] / max(r["n_tot"], 1)
     if frac < 0.80:

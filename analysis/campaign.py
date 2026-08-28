@@ -7,12 +7,19 @@ from scipy.interpolate import LinearNDInterpolator
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.abspath(os.path.join(HERE, "..", "data"))
 
-K_STEEL = 50.0
+K_STEEL = 30.0
 RHO_STEEL = 7850.0
-CP_STEEL = 490.0
+CP_STEEL = 500.0
 ALPHA = K_STEEL / (RHO_STEEL * CP_STEEL)
 CV_STEEL = RHO_STEEL * CP_STEEL
 
+K_AL = 170.0
+RHO_AL = 2700.0
+CP_AL = 900.0
+ALPHA_AL = K_AL / (RHO_AL * CP_AL)
+
+HCONV = 10.0
+QMAX = 35000.0
 SPOT_RADIUS = 4.0
 PLATE_WIDTH = 30.0
 
@@ -22,9 +29,12 @@ DURATION = 25.0
 BINNING = 4
 
 def _c(twin, th=5, lxp=80, hd=2.0, hdepth=2.50, hy0=5, hy1=15, spoty=9,
-       esz=1.00, note=""):
+       esz=1.00, note="", spotx=0.0, lyp=PLATE_WIDTH, spotr=4.0, alpha=None,
+       npp=32):
+
     return dict(twin=twin, th=th, lxp=lxp, hd=hd, hdepth=hdepth, hy0=hy0,
-                hy1=hy1, spoty=spoty, esz=esz, note=note)
+                hy1=hy1, spoty=spoty, esz=esz, note=note, spotx=spotx,
+                lyp=lyp, spotr=spotr, alpha=alpha or ALPHA, npp=npp)
 
 CASES = {
 
@@ -61,6 +71,22 @@ CASES = {
     "N1": _c("N0", hd=0.75, note="diameter 0.75 mm"),
     "U1": _c("U0", hd=1.50, note="diameter 1.5 mm"),
     "Z1": _c("Z0", hd=2.50, note="diameter 2.5 mm"),
+
+    "H1": _c("H0", hdepth=1.875, note="depth 1.875 mm"),
+    "T1": _c("T0", hdepth=3.125, note="depth 3.125 mm"),
+
+    "A64": _c("B64", note="reference, 64 substeps", npp=64),
+    "A28": _c("B28", note="reference, 128 substeps", npp=128),
+    "C64": _c("E64", hdepth=3.75, note="deep channel, 64 substeps", npp=64),
+    "C28": _c("E28", hdepth=3.75, note="deep channel, 128 substeps", npp=128),
+
+    **{f"O{t}1": _c(f"O{t}0", spotx=x, note=f"spot at x = {x:+g} mm")
+       for t, x in zip("ABDEFGH", (-6, -4, -2, 0, 2, 4, 6))},
+
+    "GA": _c("GB", th=10, lxp=160, lyp=60, hd=4.0, hdepth=5.00, hy0=10, hy1=30,
+             spoty=18, spotr=8.0, esz=2.00, note="10 mm plate, all lengths scaled"),
+
+    "AL1": _c("AL0", alpha=ALPHA_AL, note="aluminium alloy"),
 }
 
 HELD_OUT = (("E1", "shortened channel"),
@@ -69,9 +95,18 @@ HELD_OUT = (("E1", "shortened channel"),
             ("W1", "unseen pair, shallow and thin"))
 
 DEPTH_SERIES = ("B1", "C1", "D1")
+
+DEPTH_EXTRA = ("H1", "T1")
 DIAMETER_SERIES = ("F1", "J1", "C1", "K1")
 
 DIAMETER_EXTRA = ("N1", "U1", "Z1")
+
+def depth_series():
+
+    reg = registry()
+    extra = [c for c in DEPTH_EXTRA if reg.get(c)]
+    cases = list(DEPTH_SERIES) + extra
+    return sorted(cases, key=lambda c: CASES[c]["hdepth"])
 
 def diameter_series():
 
@@ -260,10 +295,12 @@ def read(cid, tone, point=None, kind="linear"):
 
     c = CASES[cid]
     f, packs, nf, nb = interpolators(cid, tone, kind)
-    p = point if point is not None else (0.0, float(c["spoty"]))
+    p = point if point is not None else (float(c.get("spotx", 0.0)),
+                                        float(c["spoty"]))
     dr = _eval(packs[0], p)
     dt = _eval(packs[1], p)
-    return dict(f=f, mu=mu(f), d_refl=dr, d_tran=dt, rho=dr / dt,
+    return dict(f=f, mu=mu(f, c.get("alpha", ALPHA)),
+                d_refl=dr, d_tran=dt, rho=dr / dt,
                 n_front=nf, n_back=nb)
 
 def series(cid, kind="linear", tones=None):
@@ -302,7 +339,8 @@ def fwhm_along_x(xyz, field, mask, y_mm, half=12.0, n=1201):
 
 def spot_to_edge(cid):
 
-    return PLATE_WIDTH / 2.0 - abs(CASES[cid]["spoty"])
+    c = CASES[cid]
+    return c.get("lyp", PLATE_WIDTH) / 2.0 - abs(c["spoty"])
 
 def verify(verbose=True):
 
@@ -323,7 +361,8 @@ def verify(verbose=True):
             if max(nf, nb) / min(nf, nb) > 1.15:
                 bad.append(f"{cid}_{tone}: faces unbalanced, {nf} against {nb}")
 
-            expected = 1.18 * c["lxp"] * PLATE_WIDTH / c["esz"] ** 2
+            expected = (1.18 * c["lxp"] * c.get("lyp", PLATE_WIDTH)
+                        / c["esz"] ** 2)
             if min(nf, nb) < 0.7 * expected:
                 bad.append(f"{cid}_{tone}: face too coarse, {min(nf, nb)} nodes "
                            f"against about {expected:.0f} expected")
@@ -332,9 +371,10 @@ def verify(verbose=True):
             w = np.abs(s[f"{cid}_{tone}_ph"][front]) ** 4
             yc = (xyz[front, 1] * w).sum() / w.sum() * 1e3
             xc = (xyz[front, 0] * w).sum() / w.sum() * 1e3
-            if abs(yc - c["spoty"]) > 2.0 or abs(xc) > 2.0:
+            xs = c.get("spotx", 0.0)
+            if abs(yc - c["spoty"]) > 2.0 or abs(xc - xs) > 2.0:
                 bad.append(f"{cid}_{tone}: spot at ({xc:+.1f},{yc:+.1f}) "
-                           f"instead of (0,{c['spoty']})")
+                           f"instead of ({xs:+.1f},{c['spoty']})")
     if verbose:
         n = sum(len(tones_of(c)) for c in CASES)
         print(f"verification: {n} defect and twin pairs checked over "

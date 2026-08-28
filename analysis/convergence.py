@@ -41,7 +41,7 @@ def _rss(p, data):
         npar += 2
     return rss, n, npar
 
-def pooled_order(data, pmin=0.2, pmax=8.0, npts=1561, alpha=0.05):
+def pooled_order(data, pmin=0.02, pmax=12.0, npts=2400, alpha=0.05):
 
     grid = np.linspace(pmin, pmax, npts)
     rss = np.array([_rss(p, data)[0] for p in grid])
@@ -53,9 +53,14 @@ def pooled_order(data, pmin=0.2, pmax=8.0, npts=1561, alpha=0.05):
         return dict(p=p_hat, lo=np.nan, hi=np.nan, dof=nu, n=n)
     thr = rss[j] * (1.0 + fdist.ppf(1 - alpha, 1, nu) / nu)
     inside = grid[rss <= thr]
+
+    at_min_edge = bool(j == 0 or j == len(grid) - 1)
     return dict(p=p_hat, lo=float(inside.min()), hi=float(inside.max()),
-                dof=int(nu), n=int(n),
-                at_edge=bool(inside.min() <= grid[0] + 1e-9
+                dof=int(nu), n=int(n), identified=not at_min_edge,
+                rss_ratio_edges=(float(rss[0] / rss[j]),
+                                 float(rss[-1] / rss[j])),
+                at_edge=bool(at_min_edge
+                             or inside.min() <= grid[0] + 1e-9
                              or inside.max() >= grid[-1] - 1e-9))
 
 def extrapolate(data, p):
@@ -70,6 +75,14 @@ def extrapolate(data, p):
                          x=[float(v) for v in x], y=[float(v) for v in y])
     return out
 
+def coarse_to_fine(data):
+
+    ch = []
+    for _, x, y in data:
+        o = np.argsort(x)
+        ch.append(abs(y[o][-1] - y[o][0]) / abs(y[o][0]))
+    return dict(median=float(np.median(ch)), max=float(np.max(ch)))
+
 def fit(batch, quantity="rho", kind="linear"):
 
     data = gather(batch, quantity, kind)
@@ -78,7 +91,8 @@ def fit(batch, quantity="rho", kind="linear"):
     o = pooled_order(data)
     ex = extrapolate(data, o["p"])
     errs = np.array([v["rel_err"] for v in ex.values()])
-    o.update(tones=len(data), quantity=quantity, kind=kind, batch=batch,
+    o.update(change=coarse_to_fine(data),
+             tones=len(data), quantity=quantity, kind=kind, batch=batch,
              err_median=float(np.median(errs)), err_max=float(errs.max()),
              err_min=float(errs.min()), extrap=ex,
              x_min=float(min(v["h_over_mu"] for v in ex.values())),

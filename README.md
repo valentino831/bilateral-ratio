@@ -1,9 +1,11 @@
-# Bilateral ratio for depth identification in diffusive media
+# Bilateral ratio of two-sided thermal responses
 
 This repository holds the complete numerical chain behind the paper
 
-> V. Razza, *A gain-invariant observable for depth identification in diffusive
-> media*
+> V. Razza, *Bilateral ratio of two-sided thermal responses for depth and size
+> identification of internal defects*
+
+    https://github.com/valentino831/bilateral-ratio
 
 Everything is here, from the generation of the finite element campaign to the
 LaTeX macros that carry the numbers into the manuscript. No result quoted in the
@@ -73,7 +75,8 @@ that no parameter can survive from a previous run. The batch directory also
 receives a copy of the `BUILD_PLATE.mac` it was generated with, and a
 `run_all.bat` that launches the runs in sequence, each in a fresh MAPDL process.
 The `.bat` is incremental: a run whose CSV already exists is skipped, so deleting
-one CSV is how a single run is repeated.
+one CSV is how a single run is repeated. A `run_all_batches.bat` that calls every
+batch in turn is written beside the batch directories.
 
 Two paths depend on the machine and are read from the environment, so that
 nothing in the repository points at a particular installation:
@@ -90,10 +93,13 @@ outside any synchronised folder.
 
     runs\<batch>\run_all.bat
 
-Each run solves eight periods of the modulated load with 32 steps per period and
-exports every second step, that is sixteen samples per period, starting after
-the first four periods so that the recorded window is in the periodic steady
-state. It writes `<RUNID>.csv`, one row per node and time step with the columns
+Each run solves eight periods of the modulated load with `NPP` steps per period,
+32 unless the batch says otherwise, and discards the first four periods so that
+the recorded window is in the periodic steady state. The export stride is
+`NSKIP = NPP/16`, so **sixteen samples per period are written whatever the
+integration step is**, and the batches solved at 64 and at 128 substeps are
+processed downstream exactly like the others. Each run writes `<RUNID>.csv`, one
+row per node and time step with the columns
 
     time [s], node id, x [m], y [m], z [m], temperature [C]
 
@@ -109,9 +115,10 @@ This verifies, run by run, the invariants that have been violated at least once
 each during the campaign: the frequency inferred from the time step against the
 frequency requested, the parameters in the `.meta` against the parameters the
 generator intended, the node count of each observed face against the element
-size, the balance between the two faces, the position of the heated spot, and
-the exact coincidence of the meshes of a defective run and of its sound twin.
-Nothing downstream should be run until this prints all pass.
+size, the balance between the two faces, the position of the heated spot against
+the position the case declares, and the exact coincidence of the meshes of a
+defective run and of its sound twin. Nothing downstream should be run until this
+prints all pass.
 
 ### 4. Extract the phasors
 
@@ -136,18 +143,24 @@ As in the quick start above.
 
 ## Batches
 
-| batch       | what it is for |
-|-------------|----------------|
-| `conv`      | grid convergence, three levels on a shortened plate plus two bridge levels on the full plate |
-| `conv2`     | the same three levels over eight frequencies, which is what the pooled fit uses |
-| `conv3`     | a finer level on a further shortened plate, used as an out-of-sample check of the fitted order |
-| `banda`     | the depth series, three depths over the band |
-| `diametri`  | the diameter series |
-| `diametri2` | three more diameters, used to test whether the surrogate is limited by the sampling of that axis |
-| `fisica`    | the reference configuration and the invariance tests, shortened channel and channel moved |
-| `g10`       | a plate of double thickness with the dimensionless groups matched |
-| `cieco`     | two configurations held out of every series, used as the out-of-sample test of the estimator |
-| `sorgente`  | the heated spot displaced along x, not used in the paper |
+The fourteen batches are 472 runs in total, half of them the sound twins.
+
+| batch        | runs | what it is for |
+|--------------|-----:|----------------|
+| `conv`       |  30 | grid convergence, three levels on a shortened plate plus two bridge levels on the full plate |
+| `conv2`      |  48 | the same three levels over eight frequencies, which is what the pooled fit uses |
+| `conv3`      |  12 | a finer level on a further shortened plate, used as an out-of-sample check of the fitted order |
+| `banda`      |  36 | the depth series, three depths over the band |
+| `diametri`   |  48 | the diameter series |
+| `diametri2`  |  54 | three more diameters, used to test whether the surrogate is limited by the sampling of that axis |
+| `profondita` |  36 | two more depths between the existing ones, which is what the surrogate of the paper is built on |
+| `fisica`     |  44 | the reference configuration and the invariance tests, shortened channel and channel moved |
+| `g10`        |   6 | a plate of double thickness with the dimensionless groups matched |
+| `g10b`       |   6 | the same, with every length scaled and not the thickness alone |
+| `alluminio`  |  18 | an aluminium alloy over a band scaled by the ratio of the diffusivities, so that no dimensionless group changes |
+| `passo`      |  28 | 64 and 128 substeps per period against the 32 of everything else, which is how the time discretization error is measured |
+| `sorgente`   |  70 | the heated spot displaced along x with respect to the channel, which is the misalignment study |
+| `cieco`      |  36 | two configurations held out of every series, used as the out-of-sample test of the estimator |
 
 ## Data format
 
@@ -187,13 +200,20 @@ and converted inside the macro, which works in metres:
 | `DEFECT`  | 1 for the channel filled with air, 0 for the sound plate |
 | `ESZ`     | element size, `FSZ` is forced equal to it |
 | `FREF`, `ASZ` | face refinement level and element size on the channel areas |
+| `KMAT`, `RMAT`, `CMAT` | conductivity, density and specific heat of the solid |
 | `HCONV`, `TAMB` | convection coefficient and ambient temperature |
 
+`NPP`, the number of time steps per period, is read by `apdl/RUN_1F.inp` and not
+by the geometry macro. Every one of these has a default inside the macro, so that
+the files remain usable on their own, and the generator writes all of them
+explicitly in each `.inp` anyway.
+
 The default configuration is a steel plate of 80 by 30 by 5 mm, with
-`k = 50 W/(m K)`, `rho = 7850 kg/m^3` and `c_p = 490 J/(kg K)`, a channel of
-2 mm diameter with its axis 2.5 mm below the excited face, and a spot of 4 mm
-radius centred at `(0, 9) mm` on that face. The peak absorbed flux is
-35 kW/m^2 for every run.
+`k = 30 W/(m K)`, `rho = 7850 kg/m^3` and `c_p = 500 J/(kg K)`, hence a thermal
+diffusivity of `7.643e-6 m^2/s`, a channel of 2 mm diameter with its axis 2.5 mm
+below the excited face, and a spot of 4 mm radius centred at `(0, 9) mm` on that
+face. The peak absorbed flux is 35 kW/m^2 for every run. The `alluminio` batch is
+the only one that departs from this material.
 
 The component holding the two observed faces is called `FACCE` and the component
 holding the heated area is called `superficie_laser`. Both names are stored in
@@ -207,3 +227,6 @@ Re-running the three analysis scripts after any change to `data/` updates the
 text and the figures of the paper together, which is the reason the chain is
 built this way.
 
+## Licence
+
+<!-- to be chosen before publication -->
