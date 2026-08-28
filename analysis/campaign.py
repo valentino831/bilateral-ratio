@@ -30,11 +30,12 @@ BINNING = 4
 
 def _c(twin, th=5, lxp=80, hd=2.0, hdepth=2.50, hy0=5, hy1=15, spoty=9,
        esz=1.00, note="", spotx=0.0, lyp=PLATE_WIDTH, spotr=4.0, alpha=None,
-       npp=32):
+       npp=32, ts_ref=None):
 
     return dict(twin=twin, th=th, lxp=lxp, hd=hd, hdepth=hdepth, hy0=hy0,
                 hy1=hy1, spoty=spoty, esz=esz, note=note, spotx=spotx,
-                lyp=lyp, spotr=spotr, alpha=alpha or ALPHA, npp=npp)
+                lyp=lyp, spotr=spotr, alpha=alpha or ALPHA, npp=npp,
+                ts_ref=ts_ref)
 
 CASES = {
 
@@ -42,13 +43,13 @@ CASES = {
     "C1": _c("A0", note="reference configuration"),
     "D1": _c("D0", hdepth=3.75, note="deep defect"),
 
-    "E1": _c("E0", hy1=13, note="channel truncated"),
+    "E1": _c("E0", hy1=13, note="channel truncated", ts_ref="C1"),
 
     "F1": _c("F0", hd=0.5, note="diameter 0.5 mm"),
     "J1": _c("J0", hd=1.0, note="diameter 1.0 mm"),
     "K1": _c("K0", hd=3.0, note="diameter 3.0 mm"),
 
-    "I1": _c("I0", hy0=-5, hy1=5, spoty=0, note="symmetric"),
+    "I1": _c("I0", hy0=-5, hy1=5, spoty=0, note="symmetric", ts_ref="C1"),
 
     "SC1": _c("SC0", note="reference, tones matched to G1"),
     "QC1": _c("QC0", lxp=40, esz=0.80, note="grid check at the highest tone"),
@@ -75,10 +76,12 @@ CASES = {
     "H1": _c("H0", hdepth=1.875, note="depth 1.875 mm"),
     "T1": _c("T0", hdepth=3.125, note="depth 3.125 mm"),
 
-    "A64": _c("B64", note="reference, 64 substeps", npp=64),
-    "A28": _c("B28", note="reference, 128 substeps", npp=128),
-    "C64": _c("E64", hdepth=3.75, note="deep channel, 64 substeps", npp=64),
-    "C28": _c("E28", hdepth=3.75, note="deep channel, 128 substeps", npp=128),
+    "A64": _c("B64", note="reference, 64 substeps", npp=64, ts_ref="C1"),
+    "A28": _c("B28", note="reference, 128 substeps", npp=128, ts_ref="C1"),
+    "C64": _c("E64", hdepth=3.75, note="deep channel, 64 substeps", npp=64,
+              ts_ref="D1"),
+    "C28": _c("E28", hdepth=3.75, note="deep channel, 128 substeps", npp=128,
+              ts_ref="D1"),
 
     **{f"O{t}1": _c(f"O{t}0", spotx=x, note=f"spot at x = {x:+g} mm")
        for t, x in zip("ABDEFGH", (-6, -4, -2, 0, 2, 4, 6))},
@@ -291,7 +294,56 @@ def _eval(pack, point_mm):
     j = int(np.argmin(((p - np.asarray(point_mm, float)) ** 2).sum(axis=1)))
     return complex(v[j].real, v[j].imag)
 
-def read(cid, tone, point=None, kind="linear"):
+CORRECT_TIMESTEP = True
+TS_DEGREE = 3
+TS_MIN_TONES = 5
+
+_TSFIT = {}
+
+def lnkappa(npp):
+
+    th = 2.0 * np.pi / npp
+    return np.log(2.0 * np.sin(th / 2.0) / th) - 1j * th / 2.0
+
+def _ts_fit(cid, point, kind):
+
+    key = (cid, point, kind)
+    if key in _TSFIT:
+        return _TSFIT[key]
+
+    src = CASES[cid].get("ts_ref") or cid
+    if src != cid:
+
+        sc = CASES[src]
+        point = (float(sc.get("spotx", 0.0)), float(sc["spoty"]))
+    tones = [t for t, _ in tones_of(src)]
+    npp = CASES[cid].get("npp", 32)
+    out = {}
+    if CORRECT_TIMESTEP and len(tones) >= TS_MIN_TONES:
+        fs, dr, dt = [], [], []
+        for t in tones:
+            f, packs, _, _ = interpolators(src, t, kind)
+            fs.append(f)
+            dr.append(_eval(packs[0], point))
+            dt.append(_eval(packs[1], point))
+        fs = np.asarray(fs, float)
+        o = np.argsort(fs)
+        fs, dr, dt = fs[o], np.asarray(dr)[o], np.asarray(dt)[o]
+        lw = np.log(2.0 * np.pi * fs)
+        lk = lnkappa(npp)
+        deg = min(TS_DEGREE, len(fs) - 2)
+        facs = []
+        for v in (dr, dt):
+            lv = np.log(np.abs(v)) + 1j * np.unwrap(np.angle(v))
+            der = np.polyval(np.polyder(np.polyfit(lw, lv, deg)), lw)
+            facs.append(np.exp(-der * lk))
+        for i, t in enumerate([tones[j] for j in o]):
+            out[t] = (complex(facs[0][i]), complex(facs[1][i]))
+
+    _TSFIT[key] = out
+    return out
+
+def read(cid, tone, point=None, kind="linear", corrected=None):
 
     c = CASES[cid]
     f, packs, nf, nb = interpolators(cid, tone, kind)
@@ -299,6 +351,12 @@ def read(cid, tone, point=None, kind="linear"):
                                         float(c["spoty"]))
     dr = _eval(packs[0], p)
     dt = _eval(packs[1], p)
+    if corrected is None:
+        corrected = CORRECT_TIMESTEP
+    if corrected:
+        fac = _ts_fit(cid, p, kind).get(tone)
+        if fac is not None:
+            dr, dt = dr * fac[0], dt * fac[1]
     return dict(f=f, mu=mu(f, c.get("alpha", ALPHA)),
                 d_refl=dr, d_tran=dt, rho=dr / dt,
                 n_front=nf, n_back=nb)

@@ -107,6 +107,16 @@ and `<RUNID>.meta`, which carries the parameters the run was actually executed
 with. Nodes are exported only on the two observed faces, which is what keeps the
 files to about 100 MB each.
 
+Backward Euler makes the scheme solve the continuous problem at the rotated
+complex frequency `s = i w (1 - exp(-i w dt))/(i w dt)`, the rotation being the
+same at every tone because `NPP` is fixed. `analysis/campaign.py` removes it to
+first order before anything else is computed, by reading the logarithmic
+derivative of each response off the band the case itself provides. The switch is
+`CORRECT_TIMESTEP` in that file, and the correction is validated against the
+`passo` batch, where three levels of time step agree within 0.05 % once it is
+applied and differ by 6 % without it. The spatial convergence study deliberately
+runs on the uncorrected data, since every level shares one step.
+
 ### 3. Check before analysing
 
     python simulation/check_campaign.py <batch> [csv_directory]

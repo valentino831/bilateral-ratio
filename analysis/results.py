@@ -398,30 +398,65 @@ def estimation_block(unc):
 def surrogate_probe(unc):
 
     tones = [t for t, _ in cp.common_tones(*cp.depth_series(), *cp.diameter_series())]
-    dep, dia = cp.depth_series(), cp.diameter_series()
+    dep, dia = cp.depth_series(), list(cp.diameter_series())
     d_ref = cp.CASES["C1"]["hd"]
     ds = np.array([cp.CASES[c]["hd"] for c in dia])
-    out = {}
-    for deg in (2, 3):
+    zs = np.array([cp.CASES[c]["hdepth"] for c in dep]) - cp.CASES["C1"]["hdepth"]
+    off_cases = [c for c, _ in cp.HELD_OUT
+                 if {t for t, _ in cp.tones_of(c)} >= set(tones)]
 
-        off = {c: [] for c, _ in cp.HELD_OUT
-               if {t for t, _ in cp.tones_of(c)} >= set(tones)}
-        node = []
+    def node_rms(cases, x, deg):
+
+        e = []
         for t in tones:
-            y = np.array([measured(c, t) for c in dia])
-            x = np.log(ds)
-            cd = np.polyfit(x, y.real, deg) + 1j * np.polyfit(x, y.imag, deg)
-            fit = np.polyval(cd.real, x) + 1j * np.polyval(cd.imag, x)
-            node.extend(np.abs(fit - y))
-        pr = _separable_surface(dep, dia, tones, d_ref, deg_d=deg)
-        for cid in off:
-            z, d = cp.CASES[cid]["hdepth"], cp.CASES[cid]["hd"]
-            off[cid] = float(np.sqrt(np.mean(
-                [abs(pr(t, z, d) - measured(cid, t)) ** 2 for t in tones])))
-        out[deg] = dict(node_rms=float(np.sqrt(np.mean(np.square(node)))),
-                        off=off)
-    return dict(n_diameters=len(dia),
-                d_values=[float(u) for u in sorted(ds)], by_degree=out)
+            y = np.array([measured(c, t) for c in cases])
+            a = np.stack([x ** k for k in range(1, deg + 1)], axis=1)
+            c, *_ = np.linalg.lstsq(a, y, rcond=None)
+            e.extend(np.abs(a @ c - y))
+        return float(np.sqrt(np.mean(np.square(e))))
+
+    def off_error(deg_z, deg_d):
+        pr = _separable_surface(dep, dia, tones, d_ref, deg_d=deg_d,
+                                deg_z=deg_z)
+        return {cid: float(np.sqrt(np.mean(
+            [abs(pr(t, cp.CASES[cid]["hdepth"], cp.CASES[cid]["hd"])
+                 - measured(cid, t)) ** 2 for t in tones])))
+                for cid in off_cases}
+
+    def loo(cases, x, deg):
+
+        e = []
+        for k in range(len(cases)):
+            if cases[k] == "C1":
+                continue
+            keep = [i for i in range(len(cases)) if i != k]
+            for t in tones:
+                y = np.array([measured(cases[i], t) for i in keep])
+                a = np.stack([x[keep] ** q for q in range(1, deg + 1)], axis=1)
+                c, *_ = np.linalg.lstsq(a, y, rcond=None)
+                pred = sum(c[q - 1] * x[k] ** q for q in range(1, deg + 1))
+                e.append(abs(pred - measured(cases[k], t)))
+        return float(np.sqrt(np.mean(np.square(e))))
+
+    degs_z = [d for d in (2, 3, 4) if d <= len(dep) - 1]
+    degs_d = [d for d in (2, 3, 4) if d <= len(dia) - 1]
+    grid = []
+    for dz in degs_z:
+        for dd in degs_d:
+            grid.append(dict(deg_z=dz, deg_d=dd, off=off_error(dz, dd)))
+    best = min(grid, key=lambda g: max(g["off"].values()))
+    base = [g for g in grid if g["deg_z"] == 2 and g["deg_d"] == 2][0]
+    lz = np.log(ds / d_ref)
+    return dict(n_diameters=len(dia), n_depths=len(dep),
+                d_values=[float(u) for u in sorted(ds)],
+                cases=off_cases, grid=grid, base=base, best=best,
+                floor=float(min(max(g["off"].values()) for g in grid)),
+                node_z=[dict(deg=d, rms=node_rms(dep, zs, d), loo=loo(dep, zs, d))
+                        for d in degs_z],
+                node_d=[dict(deg=d, rms=node_rms(dia, lz, d), loo=loo(dia, lz, d))
+                        for d in degs_d],
+                loo_best_z=min(degs_z, key=lambda d: loo(dep, zs, d)),
+                loo_best_d=min(degs_d, key=lambda d: loo(dia, lz, d)))
 
 def profiled_residual(depth, diam, tones, unc):
 
@@ -480,6 +515,7 @@ def similarity_block():
                 rel_max=max(r["rel"] for r in rows),
                 dphase_max=max(r["dphase"] for r in rows),
                 lat10_at_worst=rows[int(np.argmax([r["rel"] for r in rows]))]["lat10"],
+                lat5_at_worst=rows[int(np.argmax([r["rel"] for r in rows]))]["lat5"],
                 mu_over_L_at_worst=rows[int(np.argmax([r["rel"] for r in rows]))]["mu_over_L"])
 
 def budget_block(depth, conv):
@@ -514,30 +550,50 @@ def budget_block(depth, conv):
 
 def timestep_block():
 
-    def R(defect, sound, tone):
-        a = cp.read(defect, tone)["rho"]
-        return a
+    pairs = (("C1", 32, "A64", 64), ("A64", 64, "A28", 128),
+             ("C1", 32, "A28", 128))
 
     band = []
     for tone, f in cp.tones_of("A64"):
-        r32 = cp.read("C1", tone)["rho"]
-        r64 = cp.read("A64", tone)["rho"]
-
-        e = 2.0 * np.log(r32 / r64)
-        band.append(dict(tone=tone, f=f, rel=float(e.real),
-                         deg=float(np.degrees(e.imag))))
+        raw = np.log(cp.read("C1", tone, corrected=False)["rho"]
+                     / cp.read("A64", tone, corrected=False)["rho"])
+        cor = np.log(cp.read("C1", tone)["rho"] / cp.read("A64", tone)["rho"])
+        band.append(dict(tone=tone, f=f,
+                         raw_rel=float(np.exp(raw.real) - 1),
+                         raw_deg=float(np.degrees(raw.imag)),
+                         cor_rel=float(np.exp(cor.real) - 1),
+                         cor_deg=float(np.degrees(cor.imag))))
     band.sort(key=lambda x: x["f"])
 
-    pair = []
+    levels = []
+    for a, na, b, nb in pairs:
+        for tone in ("F02", "T180"):
+            if not (cp.registry().get(a, {}).get(tone)
+                    and cp.registry().get(b, {}).get(tone)):
+                continue
+            raw = np.log(cp.read(a, tone, corrected=False)["rho"]
+                         / cp.read(b, tone, corrected=False)["rho"])
+            cor = np.log(cp.read(a, tone)["rho"] / cp.read(b, tone)["rho"])
+            levels.append(dict(tone=tone, f=cp.read(a, tone)["f"],
+                               na=na, nb=nb,
+                               raw_rel=float(np.exp(raw.real) - 1),
+                               raw_deg=float(np.degrees(raw.imag)),
+                               cor_rel=float(np.exp(cor.real) - 1),
+                               cor_deg=float(np.degrees(cor.imag))))
+
+    deep = []
     for tone in ("F02", "T180"):
-        r32 = cp.read("C1", tone)["rho"]
-        r64 = cp.read("A64", tone)["rho"]
-        d32 = cp.read("D1", tone)["rho"]
-        d64 = cp.read("C64", tone)["rho"]
-        e_abs = 2.0 * np.log(r32 / r64)
-        e_use = 2.0 * (np.log(d32 / r32) - np.log(d64 / r64))
-        pair.append(dict(tone=tone, f=cp.read("C1", tone)["f"],
-                         abs=float(abs(e_abs)), use=float(abs(e_use))))
+        raw = np.log(cp.read("D1", tone, corrected=False)["rho"]
+                     / cp.read("C64", tone, corrected=False)["rho"])
+        cor = np.log(cp.read("D1", tone)["rho"] / cp.read("C64", tone)["rho"])
+        deep.append(dict(tone=tone, f=cp.read("D1", tone)["f"],
+                         raw_rel=float(np.exp(raw.real) - 1),
+                         raw_deg=float(np.degrees(raw.imag)),
+                         cor_rel=float(np.exp(cor.real) - 1),
+                         cor_deg=float(np.degrees(cor.imag))))
+
+    gap = max(abs(b["cor_rel"]) for b in band)
+    residual = gap / (1.0 - 0.25)
 
     tones = [t for t, _ in cp.common_tones(*cp.depth_series(),
                                            *cp.diameter_series())]
@@ -556,11 +612,23 @@ def timestep_block():
     z32, res32 = invert_z(lambda t: measured("D1", t))
     z64, res64 = invert_z(lambda t: np.log(cp.read("C64", t)["rho"]
                                            / cp.read("A64", t)["rho"]))
-    return dict(band=band, pair=pair,
-                rel_max=max(abs(b["rel"]) for b in band),
-                deg_max=max(abs(b["deg"]) for b in band),
-                use_max=max(p["use"] for p in pair),
-                z_shift=abs(z64 - z32), res32=res32, res64=res64)
+    z32r, res32r = invert_z(
+        lambda t: np.log(cp.read("D1", t, corrected=False)["rho"]
+                         / cp.read("C1", t, corrected=False)["rho"]))
+    z64r, res64r = invert_z(
+        lambda t: np.log(cp.read("C64", t, corrected=False)["rho"]
+                         / cp.read("A64", t, corrected=False)["rho"]))
+    return dict(band=band, levels=levels, deep=deep,
+                raw_rel_max=max(abs(b["raw_rel"]) for b in band),
+                raw_deg_max=max(abs(b["raw_deg"]) for b in band),
+                cor_rel_max=gap,
+                cor_deg_max=max(abs(b["cor_deg"]) for b in band),
+                deep_raw_deg_max=max(abs(b["raw_deg"]) for b in deep),
+                deep_cor_rel_max=max(abs(b["cor_rel"]) for b in deep),
+                residual=residual,
+                z_shift=abs(z64 - z32), res32=res32, res64=res64,
+                z_shift_raw=abs(z64r - z32r), res32_raw=res32r,
+                res64_raw=res64r)
 
 def misalignment_block(unc):
 
@@ -658,6 +726,10 @@ def noise_block(n_draw=300, levels=(1, 3, 10), seed=0):
     sigma = cp.noise_floor() * 1e-3
     rng = np.random.default_rng(seed)
     ref = {t: cp.read("C1", t)["rho"] for t in tones}
+    zs_grid = [cp.CASES[c]["hdepth"] for c in cp.depth_series()]
+    ds_grid = [cp.CASES[c]["hd"] for c in cp.diameter_series()]
+    z_lo, z_hi = min(zs_grid) - 0.25, max(zs_grid) + 0.75
+    d_lo, d_hi = min(ds_grid) - 0.1, max(ds_grid) + 0.5
     out = []
     for cid in ("C1", "V1", "W1"):
         base = {t: cp.read(cid, t) for t in tones}
@@ -675,15 +747,26 @@ def noise_block(n_draw=300, levels=(1, 3, 10), seed=0):
                     dt = base[t]["d_tran"] + s * (rng.normal() + 1j * rng.normal())
                     m[t] = np.log((dr / dt) / ref[t])
                 zs[n], dd[n] = invert(m)
+
+            edge = float(np.mean((zs <= z_lo + 1e-9) | (zs >= z_hi - 1e-9)
+                                 | (dd <= d_lo + 1e-9) | (dd >= d_hi - 1e-9)))
             out.append(dict(cid=cid, level=k, z_true=z_true, d_true=d_true,
                             z_clean=z0, d_clean=d0,
                             z_bias=float(zs.mean() - z0),
                             z_std=float(zs.std()),
                             d_bias=float((dd.mean() - d0) / d_true),
-                            d_std=float(dd.std() / d_true)))
+                            d_std=float(dd.std() / d_true),
+                            edge=edge))
     ref_row = [o for o in out if o["cid"] == "C1" and o["level"] == 1][0]
-    return dict(rows=out, sigma_mK=cp.noise_floor(), n_draw=n_draw,
-                z_std_nominal=max(o["z_std"] for o in out if o["level"] == 1),
+    lvl1 = [o for o in out if o["level"] == 1]
+    return dict(rows=out, sigma_mK=cp.noise_floor(),
+                sigma_diff_mK=float(cp.noise_floor() * np.sqrt(2.0)),
+                n_draw=n_draw,
+                z_std_nominal=max(o["z_std"] for o in lvl1),
+                z_bias_nominal=max(abs(o["z_bias"]) for o in lvl1),
+                z_total_nominal=max(float(np.hypot(o["z_std"], o["z_bias"]))
+                                    for o in lvl1),
+                edge_max=max(o["edge"] for o in out),
                 z_std_ten=max(o["z_std"] for o in out if o["level"] == 10),
                 ref=ref_row)
 
@@ -736,6 +819,31 @@ def model_error_block():
                               if x["what"] == "thickness" and x["eps"] == 0.02),
                 dz_thick5=max(abs(x["dz"]) for x in rows
                               if x["what"] == "thickness" and x["eps"] == 0.05))
+
+def total_budget_block(est, noise, model, ts, budget):
+
+    est_of = {r["mode"]: r for r in est["rows"]}
+    noise_of = {(r["cid"], r["level"]): r for r in noise["rows"]}
+    label = {"V1": "unseen pair, deep and thin",
+             "W1": "unseen pair, shallow and thin"}
+    rows = []
+    for cid in ("V1", "W1"):
+        e = est_of[label[cid]]
+        n = noise_of[(cid, 1)]
+        terms = [
+            ("surrogate", abs(1e3 * (e["z_hat"] - e["z_true"]))),
+            ("noise", float(np.hypot(1e3 * n["z_std"], 1e3 * n["z_bias"]))),
+            ("diffusivity, 5 \\%", model["dz_alpha5"]),
+            ("thickness, 2 \\%", model["dz_thick2"]),
+            ("time step", 1e3 * ts["z_shift"]),
+            ("mismatch, 10 \\%", budget["dz_um"][1]),
+        ]
+        rss = float(np.sqrt(sum(v ** 2 for _, v in terms)))
+        rows.append(dict(cid=cid, terms=terms, rss=rss,
+                         numerical=terms[0][1]))
+    return dict(rows=rows, names=[t[0] for t in rows[0]["terms"]],
+                rss_max=max(r["rss"] for r in rows),
+                numerical_max=max(r["numerical"] for r in rows))
 
 def _dphi_at_spot(cid, tone):
 
@@ -829,6 +937,9 @@ def compute():
     r["material"] = material_block()
     r["noise"] = noise_block()
     r["model_error"] = model_error_block()
+    r["total_budget"] = total_budget_block(r["estimation"], r["noise"],
+                                           r["model_error"], r["timestep"],
+                                           r["budget"])
     r["benchmark"] = benchmark_block()
     return r
 
@@ -984,10 +1095,21 @@ def latex_macros(r):
     put("HighToneRel", _num(100 * cv_["high_tone_check"]["rel"], 2))
 
     zs = np.array(dp["z"])
-    lz = np.array([np.log(r["rho"][i]) for i in range(3)
-                   for r in [dp["rows"][0]]])
-    put("DepthSlopeSteep", _num(abs((lz[1] - lz[0]) / (zs[1] - zs[0])), 1))
-    put("DepthSlopeShallow", _num(abs((lz[2] - lz[1]) / (zs[2] - zs[1])), 1))
+    mid = int(np.argmin(np.abs(zs - cp.CASES["C1"]["hdepth"])))
+
+    row0 = max(dp["rows"], key=lambda r: r["slope"])
+    lz = np.log(np.array(row0["rho"]))
+    put("DepthN", f"{len(zs)}")
+    put("DepthZlo", _num(zs.min(), 2))
+    put("DepthZhi", _num(zs.max(), 2))
+    put("StepNppA", "32")
+    put("StepNppB", "64")
+    put("StepNppC", "128")
+    put("DepthChordF", _num(row0["f"], 2))
+    put("DepthSlopeSteep",
+        _num(abs((lz[mid] - lz[0]) / (zs[mid] - zs[0])), 1))
+    put("DepthSlopeShallow",
+        _num(abs((lz[-1] - lz[mid]) / (zs[-1] - zs[mid])), 1))
     put("DepthSlopeMin", _num(dp["slope_min"], 2))
     put("DepthSlopeMax", _num(dp["slope_max"], 2))
     put("DepthFatMax", _num(dp["f_at_slope_max"], 2))
@@ -999,11 +1121,29 @@ def latex_macros(r):
     put("DiamMax", _num(max(dm["d"]), 1))
     pr = r["probe"]
     put("ProbeNdiam", f"{pr['n_diameters']}")
-    for deg, tag in ((2, "Par"), (3, "Cub")):
-        v = pr["by_degree"][deg]
-        put(f"Probe{tag}Node", _num(100 * v["node_rms"], 1))
-        put(f"Probe{tag}Deep", _num(100 * v["off"]["V1"], 1))
-        put(f"Probe{tag}Shal", _num(100 * v["off"]["W1"], 1))
+    put("ProbeNdepth", f"{pr['n_depths']}")
+    g = {(x["deg_z"], x["deg_d"]): x for x in pr["grid"]}
+    put("ProbeBaseDeep", _num(100 * g[(2, 2)]["off"]["V1"], 1))
+    put("ProbeBaseShal", _num(100 * g[(2, 2)]["off"]["W1"], 1))
+    put("ProbeCubDeep", _num(100 * g[(2, 3)]["off"]["V1"], 1))
+    put("ProbeCubShal", _num(100 * g[(2, 3)]["off"]["W1"], 1))
+    put("ProbeQuartDeep", _num(100 * g[(4, 2)]["off"]["V1"], 1))
+    put("ProbeQuartShal", _num(100 * g[(4, 2)]["off"]["W1"], 1))
+    put("ProbeFloor", _num(100 * pr["floor"], 1))
+    put("ProbeBestZ", f"{pr['best']['deg_z']}")
+    put("ProbeBestD", f"{pr['best']['deg_d']}")
+    put("ProbeLooZ", f"{pr['loo_best_z']}")
+    put("ProbeLooD", f"{pr['loo_best_d']}")
+    nz = {x["deg"]: x for x in pr["node_z"]}
+    nd = {x["deg"]: x for x in pr["node_d"]}
+    put("ProbeNodeZpar", _num(100 * nz[2]["rms"], 1))
+    put("ProbeNodeZquart", _num(100 * nz[4]["rms"], 2))
+    put("ProbeNodeDpar", _num(100 * nd[2]["rms"], 1))
+    put("ProbeNodeDcub", _num(100 * nd[3]["rms"], 1))
+    put("ProbeLooZpar", _num(100 * nz[2]["loo"], 0))
+    put("ProbeLooZquart", _num(100 * nz[4]["loo"], 0))
+    put("ProbeLooDpar", _num(100 * nd[2]["loo"], 0))
+    put("ProbeLooDcub", _num(100 * nd[3]["loo"], 0))
     put("DiamNodeRms", _num(100 * r["diameter"]["node_rms"], 1))
     put("DiamNodeMax", _num(100 * r["diameter"]["node_max"], 1))
     put("DiamRtwo", _num(dm["r2_max"], 2))
@@ -1061,17 +1201,36 @@ def latex_macros(r):
                                        abs(dtrue - p["d_lo"])), 2))
 
     ts = r["timestep"]
-    put("StepRelMax", _num(100 * ts["rel_max"], 1))
-    put("StepDegMax", _num(ts["deg_max"], 1))
-    put("StepUseMax", _num(100 * ts["use_max"], 1))
+    put("StepRelMax", _num(100 * ts["raw_rel_max"], 1))
+    put("StepDegMax", _num(ts["raw_deg_max"], 1))
+    put("StepCorRelMax", _num(100 * ts["cor_rel_max"], 3))
+    put("StepCorDegMax", _num(ts["cor_deg_max"], 3))
+    put("StepResidual", _num(100 * ts["residual"], 2))
+    put("StepGainRel", _num(ts["raw_rel_max"] / ts["cor_rel_max"], 0))
+    put("StepDeepDeg", _num(ts["deep_raw_deg_max"], 2))
+    put("StepDeepCorRel", _num(100 * ts["deep_cor_rel_max"], 2))
     put("StepZshift", _num(1e3 * ts["z_shift"], 0))
-    put("StepResIn", _num(100 * ts["res32"], 1))
-    put("StepResOut", _num(100 * ts["res64"], 1))
-    put("StepRelTop", _num(100 * abs(ts["band"][-1]["rel"]), 1))
-    put("StepDegTop", _num(abs(ts["band"][-1]["deg"]), 1))
-    put("StepRelBot", _num(100 * abs(ts["band"][0]["rel"]), 1))
+    put("StepResIn", _num(100 * ts["res32"], 2))
+    put("StepResOut", _num(100 * ts["res64"], 2))
+    put("StepZshiftRaw", _num(1e3 * ts["z_shift_raw"], 0))
+    put("StepResInRaw", _num(100 * ts["res32_raw"], 1))
+    put("StepResOutRaw", _num(100 * ts["res64_raw"], 1))
+    put("StepRelTop", _num(100 * abs(ts["band"][-1]["raw_rel"]), 1))
+    put("StepDegTop", _num(abs(ts["band"][-1]["raw_deg"]), 1))
+    put("StepRelBot", _num(100 * abs(ts["band"][0]["raw_rel"]), 1))
+    put("StepThetaDeg", _num(180.0 / 32, 2))
+    lk = cp.lnkappa(32)
+    put("StepKappaDeg", _num(abs(np.degrees(lk.imag)), 2))
+    hi = max(ts["levels"], key=lambda x: abs(x["raw_rel"]))
+    put("StepTripleRel", _num(100 * abs(hi["raw_rel"]), 1))
+    put("StepTripleDeg", _num(abs(hi["raw_deg"]), 1))
+    put("StepTripleCorRel", _num(100 * abs(hi["cor_rel"]), 3))
+    put("StepTripleCorDeg", _num(abs(hi["cor_deg"]), 3))
 
     mi = r["misalignment"]
+    put("MisN", f"{len(mi['rows'])}")
+    put("MisXlo", _num(min(x["x"] for x in mi["rows"]), 0))
+    put("MisXhi", _num(max(x["x"] for x in mi["rows"]), 0))
     put("MisZaligned", _num(mi["z_err_aligned"], 0))
     put("MisZtwo", _num(mi["z_err_two"], 0))
     put("MisResTwo", _num(100 * mi["res_two"], 1))
@@ -1107,8 +1266,24 @@ def latex_macros(r):
             put(f"Bench{tag}Zerr", _num(abs(x["z_err"]), 0))
             put(f"Bench{tag}Derr", _num(abs(x["d_err"]), 0))
 
+    tb = r["total_budget"]
+    put("TotalRss", _num(tb["rss_max"], 0))
+    put("TotalNumerical", _num(tb["numerical_max"], 0))
+    for row in tb["rows"]:
+        tag = "Deep" if row["cid"] == "V1" else "Shal"
+        put(f"Total{tag}Rss", _num(row["rss"], 0))
     nz = r["noise"]
     put("NoiseSigma", _num(nz["sigma_mK"], 3))
+    put("NoiseSigmaDiff", _num(nz["sigma_diff_mK"], 3))
+    put("NoiseZbias", _num(1e3 * nz["z_bias_nominal"], 0))
+    put("NoiseZtotal", _num(1e3 * nz["z_total_nominal"], 0))
+    put("NoiseEdgeMax", _num(100 * nz["edge_max"], 0))
+    _w1 = [x for x in nz["rows"] if x["cid"] == "W1" and x["level"] == 1][0]
+    put("NoiseShalZbias", _num(1e3 * _w1["z_bias"], 0))
+    put("NoiseShalZstd", _num(1e3 * _w1["z_std"], 0))
+    put("NoiseShalDbias", _num(100 * abs(_w1["d_bias"]), 1))
+    put("NoiseShalDstd", _num(100 * _w1["d_std"], 1))
+    put("NoiseShalEdge", _num(100 * _w1["edge"], 0))
     put("NoiseZstd", _num(1e3 * nz["z_std_nominal"], 0))
     put("NoiseZstdTen", _num(1e3 * nz["z_std_ten"], 0))
     put("NoiseZstdRef", _num(1e3 * nz["ref"]["z_std"], 0))
@@ -1126,7 +1301,7 @@ def latex_macros(r):
     put("SimPhaseMax", _num(sm["dphase_max"], 1))
     put("SimLatWorst", _num(sm["lat10_at_worst"], 2))
     put("SimMuLworst", _num(sm["mu_over_L_at_worst"], 2))
-    put("SimLatBest", _num(sm["rows"][0]["lat10"], 2))
+    put("SimLatBest", _num(sm["lat5_at_worst"], 2))
 
     spell = {5: "five", 10: "ten", 25: "twentyfive"}
     for e, v in zip(bg["eps"], bg["dz_um"]):
@@ -1163,8 +1338,27 @@ def latex_tables(r):
     out["ReferenceBand"] = "\n    ".join(rows)
 
     out["TimeStep"] = "\n    ".join(
-        f"{b['f']:g} & {100*b['rel']:+.1f} & {b['deg']:+.2f}" + r" \\"
+        f"{b['f']:g} & {100*b['raw_rel']:+.2f} & {b['raw_deg']:+.2f} & "
+        f"{100*b['cor_rel']:+.3f} & {b['cor_deg']:+.3f}" + r" \\"
         for b in r["timestep"]["band"])
+
+    out["TimeStepLevels"] = "\n    ".join(
+        f"{x['na']}/{x['nb']} & {x['f']:g} & {100*x['raw_rel']:+.2f} & "
+        f"{x['raw_deg']:+.2f} & {100*x['cor_rel']:+.3f} & {x['cor_deg']:+.3f}"
+        + r" \\" for x in r["timestep"]["levels"])
+
+    out["Probe"] = "\n    ".join(
+        f"{x['deg_z']} & {x['deg_d']} & {100*x['off']['V1']:.2f} & "
+        f"{100*x['off']['W1']:.2f}" + r" \\" for x in r["probe"]["grid"])
+
+    tb = r["total_budget"]
+    _tb = {row["cid"]: dict(row["terms"]) for row in tb["rows"]}
+    out["TotalBudget"] = "\n    ".join(
+        [f"{name} & {_tb['V1'][name]:.0f} & {_tb['W1'][name]:.0f}" + r" \\"
+         for name in tb["names"]]
+        + [r"\midrule"]
+        + [r"sum in quadrature & "
+           + " & ".join(f"{row['rss']:.0f}" for row in tb["rows"]) + r" \\"])
 
     out["Benchmark"] = "\n    ".join(
         f"{x['cid']} & {x['z_true']:.2f} & {x['z_hat']:.2f} & {x['z_err']:+.0f} & "
@@ -1221,8 +1415,8 @@ def latex_tables(r):
     out["EstimationRows"] = "\n    ".join(rows)
 
     out["DepthZa"] = _num(dp["z"][0], 2)
-    out["DepthZb"] = _num(dp["z"][1], 2)
-    out["DepthZc"] = _num(dp["z"][2], 2)
+    out["DepthZb"] = _num(dp["z"][len(dp["z"]) // 2], 2)
+    out["DepthZc"] = _num(dp["z"][-1], 2)
     return out
 
 def write(r):

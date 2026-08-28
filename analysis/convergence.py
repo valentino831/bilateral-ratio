@@ -15,7 +15,7 @@ def gather(batch, quantity="rho", kind="linear"):
     for tone, _ in tones:
         xs, ys = [], []
         for cid in levels:
-            r = cp.read(cid, tone, kind=kind)
+            r = cp.read(cid, tone, kind=kind, corrected=False)
             val = {"rho": abs(r["rho"]),
                    "d_refl": abs(r["d_refl"]) * 1e3,
                    "d_tran": abs(r["d_tran"]) * 1e3}[quantity]
@@ -108,14 +108,14 @@ def predict_out_of_sample(fit_batch, test_batch, kind="linear"):
     for tone, _ in cp.common_tones(*levels):
         xs, ys = [], []
         for cid in coarse:
-            r = cp.read(cid, tone, kind=kind)
+            r = cp.read(cid, tone, kind=kind, corrected=False)
             xs.append(cp.CASES[cid]["esz"] / r["mu"])
             ys.append(abs(r["rho"]))
         xs, ys = np.array(xs), np.array(ys)
 
         A = np.c_[np.ones_like(xs), xs ** p]
         coef, *_ = np.linalg.lstsq(A, ys, rcond=None)
-        rf = cp.read(finest, tone, kind=kind)
+        rf = cp.read(finest, tone, kind=kind, corrected=False)
         xf = cp.CASES[finest]["esz"] / rf["mu"]
         pred = float(coef[0] + coef[1] * xf ** p)
         got = float(abs(rf["rho"]))
@@ -131,8 +131,8 @@ def bridge(kind="linear"):
     coarse, fine = cp.BRIDGE_LEVELS
     out = []
     for tone, _ in cp.common_tones(coarse, fine):
-        a = cp.read(coarse, tone, kind=kind)
-        b = cp.read(fine, tone, kind=kind)
+        a = cp.read(coarse, tone, kind=kind, corrected=False)
+        b = cp.read(fine, tone, kind=kind, corrected=False)
         xa = cp.CASES[coarse]["esz"] / a["mu"]
         xb = cp.CASES[fine]["esz"] / b["mu"]
         rel = lambda u, v: abs(abs(u) - abs(v)) / abs(v)
