@@ -226,7 +226,3 @@ the model database and are left as they are.
 Re-running the three analysis scripts after any change to `data/` updates the
 text and the figures of the paper together, which is the reason the chain is
 built this way.
-
-## Licence
-
-<!-- to be chosen before publication -->
